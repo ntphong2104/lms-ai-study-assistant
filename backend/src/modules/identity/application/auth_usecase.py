@@ -478,8 +478,14 @@ class AuthUseCase:
         if not payload:
             return "", "", "", "Mã xác thực Google không hợp lệ hoặc đã hết hạn."
 
-        email = payload.get("email", "").strip().lower()
-        full_name = payload.get("name", "").strip()
+        raw_email = payload.get("email", "")
+        email = (raw_email if isinstance(raw_email, str) else "").strip().lower()
+        raw_name = payload.get("name", "")
+        full_name = (raw_name if isinstance(raw_name, str) else "").strip()
+        raw_google_id = payload.get("google_id", "")
+        google_id = raw_google_id if isinstance(raw_google_id, str) else ""
+        raw_picture = payload.get("picture", "")
+        picture_str = raw_picture if isinstance(raw_picture, str) else ""
 
         if not email:
             return "", "", "", "Không tìm thấy email trong thông tin Google."
@@ -497,9 +503,9 @@ class AuthUseCase:
 
             temp_token = auth.create_google_temp_token(
                 email=email,
-                google_id=payload.get("google_id", ""),
+                google_id=google_id,
                 full_name=full_name or user.full_name,
-                avatar_url=payload.get("picture", "") or user.avatar_url,
+                avatar_url=picture_str or user.avatar_url,
             )
             return temp_token, email, user.full_name, ""
 

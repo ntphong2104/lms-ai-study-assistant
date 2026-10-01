@@ -43,9 +43,43 @@ export default function GoogleCallbackPage() {
       return;
     }
 
+    // CSRF State Validation & Target Redirect Extraction
+    const stateParam = params.get("state");
+    const cookieMatch = document.cookie.match(/(?:^|; )g_oauth_state=([^;]*)/);
+    const cookieCsrfToken = cookieMatch ? decodeURIComponent(cookieMatch[1]) : "";
+    document.cookie = "g_oauth_state=; Path=/; max-age=0";
+
+    let targetRedirectUrl = "";
+    if (stateParam) {
+      try {
+        const stateObj = JSON.parse(decodeURIComponent(stateParam));
+        if (stateObj && typeof stateObj === "object") {
+          const { csrfToken, redirectUrl } = stateObj;
+          if (cookieCsrfToken && csrfToken && csrfToken !== cookieCsrfToken) {
+            setErrorMsg("Xác thực OAuth State không hợp lệ, nghi ngờ tấn công CSRF!");
+            setTimeout(() => {
+              window.location.replace("/auth/login");
+            }, 2000);
+            return;
+          }
+          if (
+            redirectUrl &&
+            typeof redirectUrl === "string" &&
+            redirectUrl.startsWith("/") &&
+            !redirectUrl.startsWith("//")
+          ) {
+            targetRedirectUrl = redirectUrl;
+          }
+        }
+      } catch {
+        // Fallback for non-JSON state values
+      }
+    }
+
     const processLogin = async () => {
       try {
-        const res = await googleLoginAction(authCode, "");
+        const callbackRedirectUri = `${window.location.origin}/auth/google/callback`;
+        const res = await googleLoginAction(authCode, "", callbackRedirectUri);
         if (res.success && res.user) {
           setAuth({
             userId: res.user.id,
@@ -56,11 +90,12 @@ export default function GoogleCallbackPage() {
           });
 
           const role = normalizeUserRole(res.user.role);
-          let target = "/learner/dashboard";
-          if (role === "USER_ROLE_ADMIN") target = "/admin/dashboard";
-          else if (role === "USER_ROLE_INSTRUCTOR") target = "/instructor/dashboard";
+          let defaultTarget = "/learner/dashboard";
+          if (role === "USER_ROLE_ADMIN") defaultTarget = "/admin/dashboard";
+          else if (role === "USER_ROLE_INSTRUCTOR") defaultTarget = "/instructor/dashboard";
 
-          window.location.replace(target);
+          const finalTarget = targetRedirectUrl || defaultTarget;
+          window.location.replace(finalTarget);
         } else {
           setErrorMsg(res.error || "Xác thực Google thất bại.");
           setTimeout(() => {

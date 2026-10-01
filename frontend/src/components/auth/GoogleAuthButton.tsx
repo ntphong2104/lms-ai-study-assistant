@@ -73,9 +73,28 @@ export function GoogleAuthButton({
     }
 
     setInternalLoading(true);
-    const redirectUri = encodeURIComponent(`${window.location.origin}/auth/google/callback`);
+    const origin = window.location.origin;
+    const redirectUri = encodeURIComponent(`${origin}/auth/google/callback`);
     const scope = encodeURIComponent("openid email profile");
-    const authUrl = `https://accounts.google.com/o/oauth2/v2/auth?client_id=${googleClientId}&redirect_uri=${redirectUri}&response_type=code&scope=${scope}&prompt=select_account`;
+
+    // Generate CSRF state token & preserve target redirect URL parameter
+    const searchParams = new URLSearchParams(window.location.search);
+    const redirectUrl = searchParams.get("redirect") || "";
+
+    const csrfToken =
+      typeof window.crypto?.randomUUID === "function"
+        ? window.crypto.randomUUID()
+        : Math.random().toString(36).substring(2) + Date.now().toString(36);
+
+    // Save state token in cookie with SameSite=Lax
+    document.cookie = `g_oauth_state=${csrfToken}; Path=/; max-age=600; SameSite=Lax${
+      window.location.protocol === "https:" ? "; Secure" : ""
+    }`;
+
+    const stateObj = { csrfToken, redirectUrl };
+    const stateStr = encodeURIComponent(JSON.stringify(stateObj));
+
+    const authUrl = `https://accounts.google.com/o/oauth2/v2/auth?client_id=${googleClientId}&redirect_uri=${redirectUri}&response_type=code&scope=${scope}&state=${stateStr}&prompt=select_account`;
     window.location.href = authUrl;
   };
 

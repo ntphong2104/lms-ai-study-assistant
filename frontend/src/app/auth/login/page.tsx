@@ -366,14 +366,15 @@ function LoginFormContent() {
                 ].map((acc) => {
                   const isCurrentLoading = quickLoggingInEmail === acc.email;
                   return (
-                    <button
+                    <Button
                       key={acc.email}
                       type="button"
+                      variant="outlined"
                       disabled={isAnyLoading}
                       onClick={() => handleQuickLogin(acc.email, acc.roleTag)}
-                      className="w-full text-left p-2.5 rounded-xl bg-card border border-border hover:border-primary/80 hover:shadow-sm text-xs font-medium flex items-center justify-between group cursor-pointer transition-all duration-150 disabled:opacity-60 disabled:cursor-not-allowed"
+                      className="w-full text-left p-2.5 h-auto rounded-xl bg-card border border-border hover:border-primary/80 hover:shadow-sm text-xs font-medium flex items-center justify-between group cursor-pointer transition-all duration-150 disabled:opacity-60 disabled:cursor-not-allowed justify-between"
                     >
-                      <div className="min-w-0 flex-1 pr-1.5">
+                      <div className="min-w-0 flex-1 pr-1.5 text-left">
                         <div className="font-semibold text-foreground group-hover:text-primary min-w-0 truncate text-[11px]">
                           {acc.label}
                         </div>
@@ -390,7 +391,7 @@ function LoginFormContent() {
                           </span>
                         )}
                       </div>
-                    </button>
+                    </Button>
                   );
                 })}
               </div>

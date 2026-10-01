@@ -105,3 +105,43 @@ async def test_google_login_auto_provisions_new_user(monkeypatch):
     assert user.role == UserRole.LEARNER
     assert access_token != ""
     assert refresh_token != ""
+
+
+@pytest.mark.asyncio
+async def test_google_login_account_linking_requires_email_verified(monkeypatch):
+    monkeypatch.setattr(settings, "ENV", "development")
+    usecase = IdentityUseCase()
+    existing_email = f"unverified_link_{uuid7().hex[:8]}@gmail.com"
+
+    # Register standard account first
+    reg_user, reg_err = await usecase.register(
+        email=existing_email,
+        password="ValidPassword123",
+        full_name="Existing Local User",
+        role_str=UserRole.LEARNER.value,
+    )
+    assert reg_err == ""
+    assert reg_user is not None
+
+    # Mock _exchange_google_code to return email_verified = False
+    from src.modules.identity.application import auth_usecase
+
+    async def mock_exchange_unverified(code, nonce="", redirect_uri=""):
+        return {
+            "google_id": "google_id_unverified_123",
+            "email": existing_email,
+            "name": "Unverified Attacker",
+            "picture": "",
+            "email_verified": False,
+        }
+
+    monkeypatch.setattr(auth_usecase, "_exchange_google_code", mock_exchange_unverified)
+
+    # Attempt Google login with unverified email on matching existing email account
+    user, access_token, _refresh_token, err = await usecase.google_login(
+        "mock_code_unverified"
+    )
+
+    assert user is None
+    assert access_token == ""
+    assert "chưa được Google xác minh" in err

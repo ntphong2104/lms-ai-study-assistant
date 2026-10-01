@@ -123,7 +123,7 @@ class AssetAuthMiddleware:
                 cookie.load(cookie_header)
                 if "access_token" in cookie:
                     return cookie["access_token"].value
-            except Exception:
+            except Exception:  # noqa: BLE001, S110
                 pass
 
         return None

@@ -34,16 +34,21 @@ def mock_s3():
 
         # Mock client context manager
         mock_client = AsyncMock()
+        mock_s3_instance.get_client.return_value.__aenter__.return_value = mock_client
         mock_s3_instance._get_client.return_value.__aenter__.return_value = mock_client
 
-        # Mock get_object response
-        mock_response = {
-            "ContentType": "video/mp4",
-            "ContentLength": 1024,
-            "Body": AsyncMock(),
-        }
-        mock_response["Body"].read.return_value = b"fake video content"
-        mock_client.get_object.return_value = mock_response
+        # Mock get_object response body stream generator
+        def _get_object_side_effect(**kwargs):
+            mock_body = AsyncMock()
+            mock_body.__aenter__.return_value = mock_body
+            mock_body.read.side_effect = [b"fake video content", b""]
+            return {
+                "ContentType": "video/mp4",
+                "ContentLength": 1024,
+                "Body": mock_body,
+            }
+
+        mock_client.get_object.side_effect = _get_object_side_effect
 
         yield mock_client
 
@@ -129,3 +134,39 @@ def test_proxy_path_traversal_blocked(test_client, mock_s3):
     response = test_client.get("/coursera-assets/public/%2E%2E%2Fetc%2Fpasswd")
     # Auth middleware also sees ".." in raw_asset_path and blocks it with 400.
     assert response.status_code == 400
+
+
+def test_proxy_public_folder_domain_constants(test_client, mock_s3):
+    """Test public folders from domain constants (thumbnails, avatars, banners) bypass auth."""
+    for folder in ("thumbnails", "avatars", "banners"):
+        response = test_client.get(f"/coursera-assets/{folder}/sample.png")
+        assert response.status_code == 200
+        assert response.headers["content-type"] == "video/mp4"
+
+
+def test_proxy_cors_credentials_headers(test_client, valid_token, mock_s3):
+    """Test CORS credentials and origin headers are present for cross-origin video player requests."""
+    headers = {
+        "Authorization": f"Bearer {valid_token}",
+        "Origin": "http://localhost:3000",
+    }
+    response = test_client.get(
+        "/coursera-assets/private/videos/vid.mp4", headers=headers
+    )
+
+    assert response.status_code == 200
+    assert response.headers["access-control-allow-origin"] == "http://localhost:3000"
+    assert response.headers["access-control-allow-credentials"] == "true"
+
+
+def test_proxy_options_preflight(test_client):
+    """Test OPTIONS preflight returns 204 with CORS credentials headers."""
+    headers = {"Origin": "http://localhost:3000"}
+    response = test_client.options(
+        "/coursera-assets/private/videos/vid.mp4", headers=headers
+    )
+
+    assert response.status_code == 204
+    assert response.headers["access-control-allow-origin"] == "http://localhost:3000"
+    assert response.headers["access-control-allow-credentials"] == "true"
+    assert "GET, HEAD, OPTIONS" in response.headers["access-control-allow-methods"]

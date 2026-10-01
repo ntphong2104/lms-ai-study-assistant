@@ -1,0 +1,344 @@
+"use client";
+
+import { use, useState, useEffect, Suspense } from "react";
+import Link from "next/link";
+import { useAuth } from "@/components/providers/AuthProvider";
+import {
+  usePartnersQuery,
+  useUpdatePartnerMutation,
+  useMyOrganizationsQuery,
+} from "@/lib/query_hooks";
+import { mapConnectError } from "@/lib/connect_error_mapper";
+import { OrgHeaderNav } from "../components/OrgHeaderNav";
+import { Button } from "@/components/ui/Button";
+import { Chip } from "@/components/ui/Chip";
+import { Surface } from "@/components/ui/Surface";
+import { Input } from "@/components/ui/Input";
+import { Textarea } from "@/components/ui/Textarea";
+import { Progress } from "@/components/ui/Progress";
+import { Settings, Building2, Save, Globe, Shield, ImageIcon, ShieldAlert } from "lucide-react";
+
+function OrgSettingsContent({ params }: { params: Promise<{ slug: string }> }) {
+  const { slug } = use(params);
+  const { userRole, isSuperAdmin } = useAuth();
+  const { data: myOrgs = [] } = useMyOrganizationsQuery();
+
+  const currentOrg = myOrgs.find((o) => o.slug === slug || o.id === slug);
+  const roleUpper = (currentOrg?.roleInOrg || "").toUpperCase();
+  const isOwnerOrAdmin =
+    isSuperAdmin ||
+    userRole === "3" ||
+    (userRole || "").toUpperCase().includes("ADMIN") ||
+    roleUpper.includes("ADMIN") ||
+    roleUpper.includes("OWNER");
+
+  const { data: partners = [], isLoading, refetch } = usePartnersQuery();
+  const partner = partners.find((p) => p.slug === slug || p.id === slug);
+
+  const [name, setName] = useState("");
+  const [description, setDescription] = useState("");
+  const [logoUrl, setLogoUrl] = useState("");
+  const [bannerUrl, setBannerUrl] = useState("");
+  const [websiteUrl, setWebsiteUrl] = useState("");
+  const [allowedDomainsStr, setAllowedDomainsStr] = useState("");
+
+  const [feedback, setFeedback] = useState<{
+    type: "success" | "error";
+    text: string;
+  } | null>(null);
+
+  const orgName =
+    partner?.name || (slug === "partner_community" ? "Coursera Project Network" : slug);
+
+  if (!isOwnerOrAdmin) {
+    return (
+      <div className="w-full flex-1 bg-background min-h-screen">
+        <main className="relative max-w-7xl mx-auto px-4 sm:px-6 py-8 space-y-8">
+          <OrgHeaderNav
+            slug={slug}
+            orgName={orgName}
+            avatarUrl={partner?.logoUrl}
+            activeTab="settings"
+            isOwnerOrAdmin={false}
+          />
+          <Surface
+            variant="low"
+            shape="2xl"
+            className="p-12 text-center space-y-4 max-w-xl mx-auto"
+          >
+            <div className="w-14 h-14 rounded-full bg-destructive/10 text-destructive flex items-center justify-center mx-auto">
+              <ShieldAlert className="w-7 h-7" aria-hidden="true" />
+            </div>
+            <h3 className="text-base font-bold text-foreground">Không có quyền quản trị</h3>
+            <p className="text-xs text-muted-foreground">
+              Bạn đang ở vai trò <strong>{currentOrg?.roleInOrg || "Giảng viên"}</strong>. Bạn không
+              có quyền thay đổi thông tin cài đặt của Tổ chức này.
+            </p>
+            <Link
+              href={`/organizations/${slug}/manage`}
+              className="inline-flex items-center px-4 py-2 rounded-xl bg-primary text-primary-foreground font-bold text-xs"
+            >
+              Quay lại Tổng quan
+            </Link>
+          </Surface>
+        </main>
+      </div>
+    );
+  }
+
+  useEffect(() => {
+    if (partner) {
+      setName(partner.name || "");
+      setDescription(partner.description || "");
+      setLogoUrl(partner.logoUrl || "");
+      setBannerUrl(partner.bannerUrl || "");
+      setWebsiteUrl(partner.websiteUrl || "");
+      setAllowedDomainsStr((partner.allowedDomains || []).join(", "));
+    } else if (slug === "partner_community") {
+      setName("Coursera Project Network");
+      setDescription("Tổ chức Đối tác bảo chứng mặc định toàn sàn.");
+    }
+  }, [partner, slug]);
+
+  const updateMutation = useUpdatePartnerMutation({
+    onSuccess: () => {
+      setFeedback({
+        type: "success",
+        text: "Đã cập nhật thông tin Tổ chức thành công!",
+      });
+      refetch();
+    },
+    onError: (err) => {
+      setFeedback({
+        type: "error",
+        text: mapConnectError(err, "Không thể cập nhật thông tin Tổ chức."),
+      });
+    },
+  });
+
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!partner?.id) {
+      setFeedback({
+        type: "error",
+        text: "Không tìm thấy ID Tổ chức để cập nhật.",
+      });
+      return;
+    }
+    setFeedback(null);
+    const allowedDomains = allowedDomainsStr
+      .split(",")
+      .map((d) => d.trim())
+      .filter(Boolean);
+
+    updateMutation.mutate({
+      id: partner.id,
+      name: name.trim(),
+      slug,
+      description: description.trim(),
+      logoUrl: logoUrl.trim(),
+      bannerUrl: bannerUrl.trim(),
+      websiteUrl: websiteUrl.trim(),
+      allowedDomains,
+      signatureImageUrl: partner.signatureImageUrl || "",
+      signerName: partner.signerName || "",
+      signerTitle: partner.signerTitle || "",
+      publicKeyPem: partner.publicKeyPem || "",
+    });
+  };
+
+  return (
+    <div className="w-full flex-1 bg-background min-h-screen">
+      <main className="relative max-w-7xl mx-auto px-4 sm:px-6 py-8 space-y-8">
+        <OrgHeaderNav
+          slug={slug}
+          orgName={orgName}
+          avatarUrl={partner?.logoUrl}
+          activeTab="settings"
+          isOwnerOrAdmin={isOwnerOrAdmin}
+        />
+
+        {/* Settings Form Container */}
+        <Surface variant="container" shape="2xl" className="p-6 sm:p-8 max-w-3xl">
+          <div className="flex items-center space-x-3 pb-6 border-b border-border">
+            <Settings className="w-6 h-6 text-primary" aria-hidden="true" />
+            <div>
+              <h2 className="text-xl font-bold text-foreground">Cài đặt & Thương hiệu Tổ chức</h2>
+              <p className="text-xs text-muted-foreground">
+                Cập nhật nhận diện thương hiệu, Logo, Website và Tên miền email bảo chứng
+                (`allowed_domains`).
+              </p>
+            </div>
+          </div>
+
+          {isLoading ? (
+            <div className="py-12 text-center text-muted-foreground flex flex-col items-center justify-center gap-3">
+              <Progress.Circular size="md" />
+              <p className="text-sm">Đang tải thông tin cài đặt…</p>
+            </div>
+          ) : (
+            <form onSubmit={handleSubmit} className="space-y-6 pt-6">
+              {feedback && (
+                <div
+                  className={`p-4 rounded-2xl text-xs font-bold ${
+                    feedback.type === "success"
+                      ? "bg-success/10 text-success border border-success/20"
+                      : "bg-destructive/10 text-destructive border border-destructive/20"
+                  }`}
+                >
+                  {feedback.text}
+                </div>
+              )}
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
+                <div className="sm:col-span-2">
+                  <Input
+                    id="orgNameInput"
+                    label="Tên Tổ chức / Partner"
+                    type="text"
+                    autoComplete="organization"
+                    required
+                    value={name}
+                    onChange={(e) => setName(e.target.value)}
+                    placeholder="ví dụ: Đại học Bách Khoa TP.HCM"
+                    startAdornment={
+                      <Building2 className="w-4 h-4 text-primary" aria-hidden="true" />
+                    }
+                  />
+                </div>
+
+                <div>
+                  <Input
+                    id="orgSlugInput"
+                    label="Slug định danh (URL)"
+                    type="text"
+                    disabled
+                    value={slug}
+                    className="font-mono cursor-not-allowed opacity-70"
+                  />
+                </div>
+
+                <div>
+                  <Input
+                    id="orgWebsiteInput"
+                    label="Website chính thức"
+                    type="url"
+                    inputMode="url"
+                    autoComplete="url"
+                    value={websiteUrl}
+                    onChange={(e) => setWebsiteUrl(e.target.value)}
+                    placeholder="https://example.edu.vn"
+                    startAdornment={<Globe className="w-4 h-4 text-primary" aria-hidden="true" />}
+                  />
+                </div>
+
+                <div className="sm:col-span-2">
+                  <Input
+                    id="orgLogoInput"
+                    label="URL Logo Tổ chức"
+                    type="url"
+                    inputMode="url"
+                    value={logoUrl}
+                    onChange={(e) => setLogoUrl(e.target.value)}
+                    placeholder="https://example.com/logo.png"
+                    startAdornment={
+                      <ImageIcon className="w-4 h-4 text-primary" aria-hidden="true" />
+                    }
+                  />
+                </div>
+
+                <div className="sm:col-span-2">
+                  <Input
+                    id="orgBannerInput"
+                    label="URL Ảnh Banner Tổ chức"
+                    type="url"
+                    inputMode="url"
+                    value={bannerUrl}
+                    onChange={(e) => setBannerUrl(e.target.value)}
+                    placeholder="https://example.com/banner.png"
+                    startAdornment={
+                      <ImageIcon className="w-4 h-4 text-primary" aria-hidden="true" />
+                    }
+                  />
+                </div>
+
+                <div className="sm:col-span-2">
+                  <Input
+                    id="orgDomainsInput"
+                    label="Domain Email Bảo chứng (allowed_domains)"
+                    type="text"
+                    value={allowedDomainsStr}
+                    onChange={(e) => setAllowedDomainsStr(e.target.value)}
+                    placeholder="ví dụ: hcmut.edu.vn, bku.edu.vn (cách nhau bởi dấu phẩy)"
+                    startAdornment={<Shield className="w-4 h-4 text-primary" aria-hidden="true" />}
+                  />
+                  <div className="flex flex-wrap gap-2 pt-2">
+                    {allowedDomainsStr
+                      .split(",")
+                      .map((s) => s.trim())
+                      .filter(Boolean)
+                      .map((domain) => (
+                        <Chip
+                          key={domain}
+                          variant="input"
+                          onRemove={() => {
+                            const updated = allowedDomainsStr
+                              .split(",")
+                              .map((s) => s.trim())
+                              .filter((s) => s && s !== domain)
+                              .join(", ");
+                            setAllowedDomainsStr(updated);
+                          }}
+                        >
+                          {domain}
+                        </Chip>
+                      ))}
+                  </div>
+                  <p className="text-[11px] text-muted-foreground">
+                    Các tài khoản có email thuộc domain này sẽ được tự động kích hoạt quyền thành
+                    viên của Tổ chức.
+                  </p>
+                </div>
+
+                <div className="space-y-1.5 sm:col-span-2">
+                  <label htmlFor="orgDescInput" className="text-xs font-bold text-foreground">
+                    Mô tả về Tổ chức
+                  </label>
+                  <Textarea
+                    id="orgDescInput"
+                    rows={3}
+                    value={description}
+                    onChange={(e) => setDescription(e.target.value)}
+                    placeholder="Giới thiệu về trường đại học hoặc tổ chức đối tác…"
+                  />
+                </div>
+              </div>
+
+              <div className="pt-6 border-t border-border flex justify-end">
+                <Button type="submit" disabled={updateMutation.isPending}>
+                  <Save className="w-4.5 h-4.5" aria-hidden="true" />
+                  Lưu Thay Đổi
+                </Button>
+              </div>
+            </form>
+          )}
+        </Surface>
+      </main>
+    </div>
+  );
+}
+
+export default function OrgSettingsPage({ params }: { params: Promise<{ slug: string }> }) {
+  return (
+    <Suspense
+      fallback={
+        <div className="flex items-center justify-center min-h-[50vh] text-muted-foreground gap-2">
+          <Progress.Circular size="sm" />
+          <span className="text-sm">Đang tải cài đặt tổ chức…</span>
+        </div>
+      }
+    >
+      <OrgSettingsContent params={params} />
+    </Suspense>
+  );
+}

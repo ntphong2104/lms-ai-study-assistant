@@ -10,11 +10,14 @@ import { UserDropdown } from "@/components/layout/UserDropdown";
 import { ThemeToggle } from "@/components/providers/ThemeToggle";
 import { NotificationBell } from "@/components/notification/NotificationBell";
 import { Button } from "@/components/ui/Button";
+import { IconButton } from "@/components/ui/IconButton";
 import { BrandLogo } from "@/components/ui/BrandLogo";
+import { NavigationMenu } from "@/components/ui/NavigationMenu";
+import { GoogleOneTapPrompt } from "@/components/auth/GoogleOneTapPrompt";
+import { cn } from "@/lib/utils";
 
 export function Navbar() {
   const { userName, isInstructorOrAdmin, isSuperAdmin } = useAuth();
-
   const pathname = usePathname();
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [isScrolled, setIsScrolled] = useState(false);
@@ -29,74 +32,93 @@ export function Navbar() {
   }, []);
 
   const isActive = (path: string) => {
+    if (!pathname) return false;
     if (path === "/") return pathname === "/";
-    return pathname?.startsWith(path);
+    return pathname.startsWith(path);
   };
 
   const getLinkClasses = (path: string) => {
     const active = isActive(path);
-    return active
-      ? "relative text-on-secondary-container font-bold px-4 py-2 rounded-full bg-secondary-container transition-colors shadow-xs"
-      : "relative text-on-surface-variant hover:text-on-surface px-4 py-2 rounded-full hover:bg-surface-container-high/60 transition-colors font-medium";
+    return cn(
+      "relative px-4 py-2 rounded-full transition-colors font-medium",
+      active
+        ? "text-on-secondary-container font-bold bg-secondary-container shadow-xs"
+        : "text-on-surface-variant hover:text-on-surface hover:bg-surface-container-high/60",
+    );
   };
 
   const getMobileLinkClasses = (path: string) => {
     const active = isActive(path);
-    return active
-      ? "block px-4 py-2.5 rounded-full text-sm font-bold text-on-secondary-container bg-secondary-container transition-colors"
-      : "block px-4 py-2.5 rounded-full text-sm font-medium text-on-surface-variant hover:bg-surface-container-high/60 transition-colors";
+    return cn(
+      "block px-4 py-2.5 rounded-full text-sm font-medium transition-colors",
+      active
+        ? "font-bold text-on-secondary-container bg-secondary-container"
+        : "text-on-surface-variant hover:bg-surface-container-high/60",
+    );
   };
 
   return (
     <header
-      className={`sticky top-0 z-sticky transition-colors duration-m3-medium-2 ease-m3-emphasized ${
+      className={cn(
+        "sticky top-0 z-sticky transition-colors duration-m3-medium-2 ease-m3-emphasized",
         isScrolled
           ? "bg-surface-container/90 backdrop-blur-md border-b border-outline-variant shadow-xs"
-          : "bg-surface border-b border-transparent shadow-none"
-      }`}
+          : "bg-surface border-b border-transparent shadow-none",
+      )}
     >
+      <GoogleOneTapPrompt />
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
         {/* Left Section: Brand Logo & Navigation Links */}
         <div className="flex items-center gap-6">
           <BrandLogo size="md" />
 
           {/* Navigation Links (Desktop) */}
-          <nav className="hidden md:flex items-center gap-2 text-sm font-semibold">
-            <Link href="/courses" prefetch={true} className={getLinkClasses("/courses")}>
-              {"Khóa học"}
-            </Link>
-            {userName && (
-              <Link href="/my-learning" prefetch={true} className={getLinkClasses("/my-learning")}>
-                {"Việc học của tôi"}
-              </Link>
-            )}
+          <NavigationMenu.Root className="hidden md:flex items-center">
+            <NavigationMenu.List className="gap-2">
+              <NavigationMenu.Item>
+                <Link href="/courses" className={getLinkClasses("/courses")}>
+                  {"Khóa học"}
+                </Link>
+              </NavigationMenu.Item>
+              {userName && (
+                <NavigationMenu.Item>
+                  <Link href="/my-learning" className={getLinkClasses("/my-learning")}>
+                    {"Việc học của tôi"}
+                  </Link>
+                </NavigationMenu.Item>
+              )}
 
-            {/* Render Instructor Portal for authorized roles */}
-            {isInstructorOrAdmin && (
-              <Link
-                href="/instructor/courses"
-                className={`${getLinkClasses("/instructor")} flex items-center gap-1.5`}
-              >
-                <span>{"Giảng Viên"}</span>
-                <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-primary/10 text-primary border border-primary/20">
-                  Portal
-                </span>
-              </Link>
-            )}
+              {/* Render Instructor Portal for authorized roles */}
+              {isInstructorOrAdmin && (
+                <NavigationMenu.Item>
+                  <Link
+                    href="/instructor/courses"
+                    className={`${getLinkClasses("/instructor/courses")} flex items-center gap-1.5`}
+                  >
+                    <span>{"Giảng Viên"}</span>
+                    <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-primary/10 text-primary border border-primary/20">
+                      Portal
+                    </span>
+                  </Link>
+                </NavigationMenu.Item>
+              )}
 
-            {/* Render Admin Enterprise Dashboard Link */}
-            {isSuperAdmin && (
-              <Link
-                href="/admin/dashboard"
-                className={`${getLinkClasses("/admin")} flex items-center gap-1.5`}
-              >
-                <span>Admin</span>
-                <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-primary/10 text-primary border border-primary/20">
-                  Enterprise
-                </span>
-              </Link>
-            )}
-          </nav>
+              {/* Render Admin Enterprise Dashboard Link */}
+              {isSuperAdmin && (
+                <NavigationMenu.Item>
+                  <Link
+                    href="/admin/dashboard"
+                    className={`${getLinkClasses("/admin/dashboard")} flex items-center gap-1.5`}
+                  >
+                    <span>Admin</span>
+                    <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-primary/10 text-primary border border-primary/20">
+                      Enterprise
+                    </span>
+                  </Link>
+                </NavigationMenu.Item>
+              )}
+            </NavigationMenu.List>
+          </NavigationMenu.Root>
         </div>
 
         {/* User Auth & Actions Section */}
@@ -111,45 +133,49 @@ export function Navbar() {
           ) : (
             <div className="flex items-center gap-2">
               <Button
-                variant="outline"
+                variant="outlined"
                 size="sm"
-                asChild
+                render={<Link href="/auth/login" />}
                 className="rounded-xl text-xs font-semibold bg-primary/10 border-primary/20 text-primary hover:bg-primary/20"
               >
-                <Link href="/auth/login">{"Đăng nhập"}</Link>
+                {"Đăng nhập"}
               </Button>
               <Button
-                variant="primary"
+                variant="filled"
                 size="sm"
-                asChild
+                render={<Link href="/auth/register" />}
                 className="rounded-xl text-xs font-semibold shadow-md shadow-primary/20"
               >
-                <Link href="/auth/register">{"Đăng ký"}</Link>
+                {"Đăng ký"}
               </Button>
             </div>
           )}
 
           {/* Mobile Hamburger Toggle Button */}
-          <Button
+          <IconButton
             type="button"
-            variant="ghost"
-            size="icon"
+            variant="standard"
+            aria-expanded={mobileMenuOpen}
+            aria-controls="mobile-navigation-menu"
             onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
             className="md:hidden rounded-xl text-muted-foreground hover:bg-muted"
-            aria-label="Bật/tắt menu điều hướng"
+            aria-label={mobileMenuOpen ? "Đóng menu điều hướng" : "Mở menu điều hướng"}
           >
             {mobileMenuOpen ? (
               <X className="w-6 h-6" aria-hidden="true" />
             ) : (
               <Menu className="w-6 h-6" aria-hidden="true" />
             )}
-          </Button>
+          </IconButton>
         </div>
       </div>
 
       {/* Mobile Drawer Menu */}
       {mobileMenuOpen && (
-        <div className="md:hidden border-t border-border bg-card/95 backdrop-blur-lg px-4 py-4 space-y-1.5 animate-fade-in">
+        <div
+          id="mobile-navigation-menu"
+          className="md:hidden border-t border-border bg-card/95 backdrop-blur-lg px-4 py-4 space-y-1.5 animate-fade-in"
+        >
           <Link
             href="/courses"
             onClick={() => setMobileMenuOpen(false)}
@@ -170,7 +196,10 @@ export function Navbar() {
             <Link
               href="/instructor/courses"
               onClick={() => setMobileMenuOpen(false)}
-              className={`${getMobileLinkClasses("/instructor")} flex items-center justify-between`}
+              className={cn(
+                getMobileLinkClasses("/instructor/courses"),
+                "flex items-center justify-between",
+              )}
             >
               <span>{"Giảng Viên"}</span>
               <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-primary/10 text-primary border border-primary/20">
@@ -182,7 +211,10 @@ export function Navbar() {
             <Link
               href="/admin/dashboard"
               onClick={() => setMobileMenuOpen(false)}
-              className={`${getMobileLinkClasses("/admin")} flex items-center justify-between`}
+              className={cn(
+                getMobileLinkClasses("/admin/dashboard"),
+                "flex items-center justify-between",
+              )}
             >
               <span>Admin</span>
               <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-primary/10 text-primary border border-primary/20">

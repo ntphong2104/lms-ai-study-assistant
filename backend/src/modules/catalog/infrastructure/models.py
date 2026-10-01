@@ -1,19 +1,23 @@
 from sqlalchemy import (
     ARRAY,
-    Enum as SQLEnum,
+    JSON,
+    Boolean,
+    Float,
     ForeignKey,
     Integer,
-    JSON,
+    Numeric,
     String,
     Text,
     UniqueConstraint,
-    Float,
-    Boolean,
 )
+from sqlalchemy import (
+    Enum as SQLEnum,
+)
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from src.modules.catalog.domain.entities import ItemType, CourseStatus
-from src.modules.identity.domain.constants import INTERNAL_SYSTEM_ORG_ID
+from src.modules.catalog.domain import CourseStatus, ItemType
+from src.modules.identity.domain import INTERNAL_SYSTEM_ORG_ID
 from src.shared.infrastructure.database import Base
 
 
@@ -60,9 +64,7 @@ class CourseModel(Base):
     partner_logo_url: Mapped[str] = mapped_column(
         String(512), nullable=False, default=""
     )
-    instructor_names: Mapped[list[str]] = mapped_column(
-        ARRAY(String(128)), nullable=False, default=list
-    )
+
     subject: Mapped[str] = mapped_column(
         String(64), nullable=False, server_default="UNSPECIFIED"
     )
@@ -80,7 +82,7 @@ class CourseModel(Base):
         Boolean, nullable=False, default=True, server_default="true"
     )
     price: Mapped[float] = mapped_column(
-        Float, nullable=False, server_default="1190000.0"
+        Numeric(12, 2, asdecimal=False), nullable=False, server_default="1190000.0"
     )
     currency: Mapped[str] = mapped_column(
         String(8), nullable=False, server_default="VND"
@@ -116,7 +118,10 @@ class WeekModuleModel(Base):
 
     id: Mapped[str] = mapped_column(String(64), primary_key=True)
     course_id: Mapped[str] = mapped_column(
-        String(64), ForeignKey("courses.id", ondelete="CASCADE"), nullable=False
+        String(64),
+        ForeignKey("courses.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
     )
     week_number: Mapped[int] = mapped_column(Integer, nullable=False)
     title: Mapped[str] = mapped_column(String(255), nullable=False)
@@ -138,7 +143,10 @@ class LessonModel(Base):
 
     id: Mapped[str] = mapped_column(String(64), primary_key=True)
     week_module_id: Mapped[str] = mapped_column(
-        String(64), ForeignKey("week_modules.id", ondelete="CASCADE"), nullable=False
+        String(64),
+        ForeignKey("week_modules.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
     )
     title: Mapped[str] = mapped_column(String(255), nullable=False)
     estimated_minutes: Mapped[int] = mapped_column(Integer, nullable=False, default=30)
@@ -162,7 +170,10 @@ class LearningItemModel(Base):
 
     id: Mapped[str] = mapped_column(String(64), primary_key=True)
     lesson_id: Mapped[str] = mapped_column(
-        String(64), ForeignKey("lessons.id", ondelete="CASCADE"), nullable=False
+        String(64),
+        ForeignKey("lessons.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
     )
     title: Mapped[str] = mapped_column(String(255), nullable=False)
     type: Mapped[ItemType] = mapped_column(
@@ -178,9 +189,13 @@ class LearningItemModel(Base):
         Integer, nullable=False, default=0, server_default="0"
     )
     starter_code: Mapped[str] = mapped_column(Text, nullable=False, default="")
-    test_cases_json: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    test_cases_json: Mapped[str] = mapped_column(
+        JSON().with_variant(JSONB, "postgresql"), nullable=False, default=""
+    )
     language: Mapped[str] = mapped_column(String(32), nullable=False, default="")
-    rubric_criteria_json: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    rubric_criteria_json: Mapped[str] = mapped_column(
+        JSON().with_variant(JSONB, "postgresql"), nullable=False, default=""
+    )
     quiz_matrix_id: Mapped[str] = mapped_column(String(64), nullable=False, default="")
     auto_transcribe: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=False, server_default="false"
@@ -206,7 +221,10 @@ class InteractiveTranscriptModel(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     item_id: Mapped[str] = mapped_column(
-        String(64), ForeignKey("learning_items.id", ondelete="CASCADE"), nullable=False
+        String(64),
+        ForeignKey("learning_items.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
     )
     timestamp_seconds: Mapped[int] = mapped_column(Integer, nullable=False)
     text: Mapped[str] = mapped_column(Text, nullable=False)
@@ -221,7 +239,10 @@ class InVideoQuizModel(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     item_id: Mapped[str] = mapped_column(
-        String(64), ForeignKey("learning_items.id", ondelete="CASCADE"), nullable=False
+        String(64),
+        ForeignKey("learning_items.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
     )
     timestamp_seconds: Mapped[int] = mapped_column(Integer, nullable=False)
     question: Mapped[str] = mapped_column(Text, nullable=False)
@@ -298,4 +319,21 @@ class CourseCollaboratorModel(Base):
         index=True,
     )
     role: Mapped[str] = mapped_column(String(32), nullable=False)
+    created_at: Mapped[str] = mapped_column(String(64), nullable=False)
+
+
+class CourseAuditLogModel(Base):
+    __tablename__ = "course_audit_logs"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    course_id: Mapped[str] = mapped_column(
+        String(64),
+        ForeignKey("courses.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    actor_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    target_user_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    action: Mapped[str] = mapped_column(String(64), nullable=False)
+    details: Mapped[str] = mapped_column(Text, nullable=True, default="")
     created_at: Mapped[str] = mapped_column(String(64), nullable=False, default="")

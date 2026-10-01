@@ -1,30 +1,33 @@
-import uuid
+from datetime import UTC, datetime
 from typing import Any
-from datetime import datetime, timezone
+
 from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
+from uuid6 import uuid7
 
-from src.modules.catalog.domain.entities import (
+from src.modules.catalog.domain import (
+    Category,
     Course,
     CourseAnnouncement,
     CourseReview,
     CourseStatus,
     EnrolledStudent,
-    InVideoQuiz,
+    ICatalogRepository,
     InstructorAnalytics,
     InteractiveTranscript,
+    InVideoQuiz,
     ItemType,
     LearningItem,
     Lesson,
     Specialization,
     WeekModule,
-    Category,
 )
-from src.modules.catalog.domain.repository import ICatalogRepository
 from src.modules.catalog.infrastructure.models import (
+    CategoryModel,
     CourseAnnouncementModel,
+    CourseAuditLogModel,
     CourseCollaboratorModel,
     CourseModel,
     CourseReviewModel,
@@ -33,8 +36,8 @@ from src.modules.catalog.infrastructure.models import (
     LessonModel,
     SpecializationModel,
     WeekModuleModel,
-    CategoryModel,
 )
+from src.modules.identity.infrastructure.models import UserModel
 from src.shared.auth import get_current_user
 from src.shared.infrastructure.scopes import apply_organization_scope
 
@@ -110,7 +113,7 @@ def _model_to_domain_course(model: CourseModel) -> Course:
         description=model.description,
         partner_name=model.partner_name,
         partner_logo_url=model.partner_logo_url,
-        instructor_names=model.instructor_names,
+        instructor_names=[],
         week_modules=week_modules,
         average_rating=model.average_rating,
         review_count=model.review_count,
@@ -196,6 +199,7 @@ class SQLAlchemyCatalogRepository(ICatalogRepository):
         status_filter: str | CourseStatus = "",
         organization_id: str | None = None,
     ) -> tuple[list[Course], str]:
+        _ = page_token
         stmt = select(CourseModel).options(
             selectinload(CourseModel.week_modules)
             .selectinload(WeekModuleModel.lessons)
@@ -242,10 +246,7 @@ class SQLAlchemyCatalogRepository(ICatalogRepository):
 
         res = await self.session.execute(stmt)
         models = res.scalars().all()
-        courses: list[Course] = []
-        for m in models:
-            courses.append(_model_to_domain_course(m))
-        return courses, ""
+        return [_model_to_domain_course(m) for m in models], ""
 
     async def list_instructor_courses(
         self,
@@ -254,6 +255,7 @@ class SQLAlchemyCatalogRepository(ICatalogRepository):
         page_token: str = "",
         status_filter: str | CourseStatus | None = None,
     ) -> tuple[list[Course], str]:
+        _ = page_token
 
         stmt = select(CourseModel).options(
             selectinload(CourseModel.week_modules)
@@ -346,7 +348,7 @@ class SQLAlchemyCatalogRepository(ICatalogRepository):
         description: str,
         partner_name: str,
         partner_logo_url: str,
-        instructor_names: list[str],
+        instructor_names: list[str] | None = None,
         subject: str = "",
         level: str = "",
         owner_id: str = "",
@@ -354,7 +356,15 @@ class SQLAlchemyCatalogRepository(ICatalogRepository):
         financial_aid_enabled: bool = True,
         organization_id: str = "partner_community",
     ) -> Course:
-        course_id = f"course-{slug}" if slug else f"course-{uuid.uuid4().hex[:8]}"
+        _ = instructor_names
+        import re
+
+        safe_slug = (
+            re.sub(r"[^a-z0-9-]", "", slug.lower().strip().replace(" ", "-"))
+            if slug
+            else ""
+        )
+        course_id = f"course-{safe_slug}" if safe_slug else f"course-{uuid7().hex[:8]}"
         clean_org_id = (
             organization_id.strip()
             if organization_id and organization_id.strip()
@@ -380,11 +390,10 @@ class SQLAlchemyCatalogRepository(ICatalogRepository):
         model = CourseModel(
             id=course_id,
             title=title,
-            slug=slug or course_id,
+            slug=safe_slug or course_id,
             description=description,
             partner_name=final_partner_name,
             partner_logo_url=final_partner_logo,
-            instructor_names=instructor_names or [],
             subject=subject,
             level=level,
             owner_id=owner_id,
@@ -397,11 +406,11 @@ class SQLAlchemyCatalogRepository(ICatalogRepository):
 
         if owner_id:
             owner_collab = CourseCollaboratorModel(
-                id=f"collab_{uuid.uuid4().hex[:12]}",
+                id=f"collab_{uuid7().hex[:12]}",
                 course_id=course_id,
                 user_id=owner_id,
                 role="PRIMARY_INSTRUCTOR",
-                created_at=datetime.now(timezone.utc).isoformat(),
+                created_at=datetime.now(UTC).isoformat(),
             )
             self.session.add(owner_collab)
 
@@ -409,17 +418,17 @@ class SQLAlchemyCatalogRepository(ICatalogRepository):
             for co_id in co_instructor_ids:
                 if co_id != owner_id:
                     co_collab = CourseCollaboratorModel(
-                        id=f"collab_{uuid.uuid4().hex[:12]}",
+                        id=f"collab_{uuid7().hex[:12]}",
                         course_id=course_id,
                         user_id=co_id,
                         role="CO_INSTRUCTOR",
-                        created_at=datetime.now(timezone.utc).isoformat(),
+                        created_at=datetime.now(UTC).isoformat(),
                     )
                     self.session.add(co_collab)
 
         await self.session.commit()
         c_detail = await self.get_course_detail(course_id)
-        return c_detail if c_detail else _model_to_domain_course(model)
+        return c_detail or _model_to_domain_course(model)
 
     async def update_course(
         self,
@@ -428,11 +437,12 @@ class SQLAlchemyCatalogRepository(ICatalogRepository):
         description: str,
         partner_name: str,
         partner_logo_url: str,
-        instructor_names: list[str],
+        instructor_names: list[str] | None = None,
         subject: str = "",
         level: str = "",
         financial_aid_enabled: bool = True,
     ) -> Course | None:
+        _ = instructor_names
         stmt = select(CourseModel).where(CourseModel.id == course_id)
         res = await self.session.execute(stmt)
         model = res.scalar_one_or_none()
@@ -446,8 +456,7 @@ class SQLAlchemyCatalogRepository(ICatalogRepository):
             model.partner_name = partner_name
         if partner_logo_url:
             model.partner_logo_url = partner_logo_url
-        if instructor_names:
-            model.instructor_names = instructor_names
+
         model.financial_aid_enabled = financial_aid_enabled
 
         if subject and subject != "UNSPECIFIED":
@@ -474,7 +483,7 @@ class SQLAlchemyCatalogRepository(ICatalogRepository):
     async def create_week_module(
         self, course_id: str, title: str, summary: str
     ) -> WeekModule:
-        real_id, _ = await self.get_course_id_by_slug_or_id(course_id)
+        real_id = await self.get_course_id_by_slug_or_id(course_id)
         stmt = select(func.max(WeekModuleModel.week_number)).where(
             WeekModuleModel.course_id == real_id
         )
@@ -482,7 +491,7 @@ class SQLAlchemyCatalogRepository(ICatalogRepository):
         max_week = res.scalar()
         week_number = (max_week or 0) + 1
 
-        wm_id = f"week-{week_number}-{uuid.uuid4().hex[:6]}"
+        wm_id = f"week-{week_number}-{uuid7().hex[:6]}"
         wm_model = WeekModuleModel(
             id=wm_id,
             course_id=real_id,
@@ -503,7 +512,8 @@ class SQLAlchemyCatalogRepository(ICatalogRepository):
     async def create_lesson(
         self, course_id: str, week_module_id: str, title: str, estimated_minutes: int
     ) -> Lesson:
-        l_id = f"lesson-{uuid.uuid4().hex[:8]}"
+        _ = course_id
+        l_id = f"lesson-{uuid7().hex[:8]}"
         l_model = LessonModel(
             id=l_id,
             week_module_id=week_module_id,
@@ -537,7 +547,8 @@ class SQLAlchemyCatalogRepository(ICatalogRepository):
         rubric_criteria_json: str = "",
         quiz_matrix_id: str = "",
     ) -> LearningItem:
-        item_id = f"item-{uuid.uuid4().hex[:8]}"
+        _ = course_id
+        item_id = f"item-{uuid7().hex[:8]}"
         type_mapping = {
             0: ItemType.UNSPECIFIED,
             1: ItemType.VIDEO,
@@ -678,7 +689,7 @@ class SQLAlchemyCatalogRepository(ICatalogRepository):
         res = await self.session.execute(stmt)
         existing = res.scalar_one_or_none()
 
-        now_str = datetime.now(timezone.utc).isoformat()
+        now_str = datetime.now(UTC).isoformat()
         if existing:
             existing.rating_stars = rating_stars
             existing.comment_text = comment_text
@@ -699,7 +710,7 @@ class SQLAlchemyCatalogRepository(ICatalogRepository):
 
             return _model_to_domain_review(existing)
 
-        review_id = f"rev-{uuid.uuid4().hex[:10]}"
+        review_id = f"rev-{uuid7().hex[:10]}"
         model = CourseReviewModel(
             id=review_id,
             user_id=user_id,
@@ -755,6 +766,7 @@ class SQLAlchemyCatalogRepository(ICatalogRepository):
     async def list_course_reviews(
         self, course_id: str, page_size: int = 10, page_token: str = ""
     ) -> tuple[list[CourseReview], float, int, str]:
+        _ = page_token
         stmt = (
             select(CourseReviewModel)
             .where(CourseReviewModel.course_id == course_id)
@@ -779,18 +791,14 @@ class SQLAlchemyCatalogRepository(ICatalogRepository):
         avg_rating, count = row
         return round(float(avg_rating), 1), int(count)
 
-    async def get_course_id_by_slug_or_id(
-        self, course_id_or_slug: str
-    ) -> tuple[str, list[str]]:
-        stmt = select(CourseModel.id, CourseModel.instructor_names).where(
+    async def get_course_id_by_slug_or_id(self, course_id_or_slug: str) -> str:
+        stmt = select(CourseModel.id).where(
             (CourseModel.id == course_id_or_slug)
             | (CourseModel.slug == course_id_or_slug)
         )
         res = await self.session.execute(stmt)
-        row = res.first()
-        if row:
-            return row[0], row[1] or []
-        return course_id_or_slug, []
+        row = res.scalar_one_or_none()
+        return row or course_id_or_slug
 
     async def list_categories(self, type_filter: str = "") -> list[Category]:
         stmt = select(CategoryModel)
@@ -809,8 +817,8 @@ class SQLAlchemyCatalogRepository(ICatalogRepository):
         import re
 
         slug = re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-")
-        cat_id = f"cat-{uuid.uuid4().hex[:8]}"
-        now_str = datetime.now(timezone.utc).isoformat()
+        cat_id = f"cat-{uuid7().hex[:8]}"
+        now_str = datetime.now(UTC).isoformat()
 
         model = CategoryModel(
             id=cat_id, name=name, slug=slug, type=category_type, created_at=now_str
@@ -832,20 +840,26 @@ class SQLAlchemyCatalogRepository(ICatalogRepository):
         return True
 
     async def delete_course(self, course_id: str) -> bool:
-        real_id, _ = await self.get_course_id_by_slug_or_id(course_id)
+        real_id = await self.get_course_id_by_slug_or_id(course_id)
         stmt = select(CourseModel).where(CourseModel.id == real_id)
         res = await self.session.execute(stmt)
         course = res.scalar_one_or_none()
         if not course:
             return False
+        if course.status == CourseStatus.PUBLISHED:
+            raise ValueError(
+                "Không thể xóa khóa học ở trạng thái Đã xuất bản (PUBLISHED)."
+            )
         await self.session.delete(course)
         await self.session.commit()
         return True
 
     async def update_week_module(
-        self, id: str, course_id: str, title: str, summary: str
+        self, module_id: str, course_id: str, title: str, summary: str
     ) -> WeekModule | None:
-        stmt = select(WeekModuleModel).where(WeekModuleModel.id == id)
+        stmt = select(WeekModuleModel).where(
+            WeekModuleModel.id == module_id, WeekModuleModel.course_id == course_id
+        )
         res = await self.session.execute(stmt)
         wm = res.scalar_one_or_none()
         if not wm:
@@ -862,8 +876,10 @@ class SQLAlchemyCatalogRepository(ICatalogRepository):
             lessons=[],
         )
 
-    async def delete_week_module(self, id: str, course_id: str) -> bool:
-        stmt = select(WeekModuleModel).where(WeekModuleModel.id == id)
+    async def delete_week_module(self, module_id: str, course_id: str) -> bool:
+        stmt = select(WeekModuleModel).where(
+            WeekModuleModel.id == module_id, WeekModuleModel.course_id == course_id
+        )
         res = await self.session.execute(stmt)
         wm = res.scalar_one_or_none()
         if not wm:
@@ -874,13 +890,14 @@ class SQLAlchemyCatalogRepository(ICatalogRepository):
 
     async def update_lesson(
         self,
-        id: str,
+        lesson_id: str,
         course_id: str,
         week_module_id: str,
         title: str,
         estimated_minutes: int,
     ) -> Lesson | None:
-        stmt = select(LessonModel).where(LessonModel.id == id)
+        _ = course_id
+        stmt = select(LessonModel).where(LessonModel.id == lesson_id)
         res = await self.session.execute(stmt)
         lesson = res.scalar_one_or_none()
         if not lesson:
@@ -898,8 +915,9 @@ class SQLAlchemyCatalogRepository(ICatalogRepository):
             items=[],
         )
 
-    async def delete_lesson(self, id: str, course_id: str) -> bool:
-        stmt = select(LessonModel).where(LessonModel.id == id)
+    async def delete_lesson(self, lesson_id: str, course_id: str) -> bool:
+        _ = course_id
+        stmt = select(LessonModel).where(LessonModel.id == lesson_id)
         res = await self.session.execute(stmt)
         lesson = res.scalar_one_or_none()
         if not lesson:
@@ -910,7 +928,7 @@ class SQLAlchemyCatalogRepository(ICatalogRepository):
 
     async def update_learning_item(
         self,
-        id: str,
+        item_id: str,
         course_id: str,
         lesson_id: str,
         title: str,
@@ -927,10 +945,11 @@ class SQLAlchemyCatalogRepository(ICatalogRepository):
         rubric_criteria_json: str = "",
         quiz_matrix_id: str = "",
     ) -> LearningItem | None:
+        _ = course_id
         stmt = (
             select(LearningItemModel)
             .options(selectinload(LearningItemModel.in_video_quizzes))
-            .where(LearningItemModel.id == id)
+            .where(LearningItemModel.id == item_id)
         )
         res = await self.session.execute(stmt)
         item = res.scalar_one_or_none()
@@ -980,6 +999,10 @@ class SQLAlchemyCatalogRepository(ICatalogRepository):
         await self.session.commit()
         await self.session.refresh(item)
 
+        transcripts = [
+            InteractiveTranscript(timestamp_seconds=t.timestamp_seconds, text=t.text)
+            for t in item.interactive_transcripts or []
+        ]
         quizzes = [
             InVideoQuiz(
                 timestamp_seconds=q.timestamp_seconds,
@@ -988,8 +1011,9 @@ class SQLAlchemyCatalogRepository(ICatalogRepository):
                 correct_option_index=q.correct_option_index,
                 explanation=q.explanation,
             )
-            for q in item.in_video_quizzes
+            for q in item.in_video_quizzes or []
         ]
+
         return LearningItem(
             id=item.id,
             title=item.title,
@@ -997,8 +1021,7 @@ class SQLAlchemyCatalogRepository(ICatalogRepository):
             estimated_minutes=item.estimated_minutes,
             video_url=item.video_url,
             vtt_subtitle_url=item.vtt_subtitle_url,
-            auto_transcribe=item.auto_transcribe,
-            interactive_transcripts=[],
+            interactive_transcripts=transcripts,
             in_video_quizzes=quizzes,
             reading_markdown=item.reading_markdown,
             starter_code=item.starter_code,
@@ -1008,8 +1031,9 @@ class SQLAlchemyCatalogRepository(ICatalogRepository):
             quiz_matrix_id=item.quiz_matrix_id,
         )
 
-    async def delete_learning_item(self, id: str, course_id: str) -> bool:
-        stmt = select(LearningItemModel).where(LearningItemModel.id == id)
+    async def delete_learning_item(self, item_id: str, course_id: str) -> bool:
+        _ = course_id
+        stmt = select(LearningItemModel).where(LearningItemModel.id == item_id)
         res = await self.session.execute(stmt)
         item = res.scalar_one_or_none()
         if not item:
@@ -1021,9 +1045,9 @@ class SQLAlchemyCatalogRepository(ICatalogRepository):
     async def create_course_announcement(
         self, course_id: str, author_id: str, author_name: str, title: str, content: str
     ) -> CourseAnnouncement:
-        real_id, _ = await self.get_course_id_by_slug_or_id(course_id)
-        ann_id = f"ann_{uuid.uuid4().hex[:12]}"
-        now_iso = datetime.now(timezone.utc).isoformat()
+        real_id = await self.get_course_id_by_slug_or_id(course_id)
+        ann_id = f"ann_{uuid7().hex[:12]}"
+        now_iso = datetime.now(UTC).isoformat()
         ann = CourseAnnouncementModel(
             id=ann_id,
             course_id=real_id,
@@ -1048,7 +1072,7 @@ class SQLAlchemyCatalogRepository(ICatalogRepository):
     async def list_course_announcements(
         self, course_id: str
     ) -> list[CourseAnnouncement]:
-        real_id, _ = await self.get_course_id_by_slug_or_id(course_id)
+        real_id = await self.get_course_id_by_slug_or_id(course_id)
         stmt = (
             select(CourseAnnouncementModel)
             .where(CourseAnnouncementModel.course_id == real_id)
@@ -1070,7 +1094,7 @@ class SQLAlchemyCatalogRepository(ICatalogRepository):
         ]
 
     async def get_instructor_analytics(self, course_id: str) -> InstructorAnalytics:
-        real_id, _ = await self.get_course_id_by_slug_or_id(course_id)
+        real_id = await self.get_course_id_by_slug_or_id(course_id)
         avg_rating, total_reviews = await self.get_course_rating_stats(real_id)
 
         identity_repo_factory = __import__(
@@ -1131,7 +1155,7 @@ class SQLAlchemyCatalogRepository(ICatalogRepository):
     async def reorder_week_modules(
         self, course_id: str, ordered_week_module_ids: list[str]
     ) -> bool:
-        real_id, _ = await self.get_course_id_by_slug_or_id(course_id)
+        real_id = await self.get_course_id_by_slug_or_id(course_id)
         for idx, wm_id in enumerate(ordered_week_module_ids, start=1):
             stmt = (
                 select(WeekModuleModel)
@@ -1148,11 +1172,11 @@ class SQLAlchemyCatalogRepository(ICatalogRepository):
     async def reorder_lessons(
         self, course_id: str, week_module_id: str, ordered_lesson_ids: list[str]
     ) -> bool:
+        _ = course_id
         for idx, lesson_id in enumerate(ordered_lesson_ids):
-            stmt = (
-                select(LessonModel)
-                .where(LessonModel.id == lesson_id)
-                .where(LessonModel.week_module_id == week_module_id)
+            stmt = select(LessonModel).where(
+                LessonModel.id == lesson_id,
+                LessonModel.week_module_id == week_module_id,
             )
             res = await self.session.execute(stmt)
             lesson = res.scalar_one_or_none()
@@ -1164,6 +1188,7 @@ class SQLAlchemyCatalogRepository(ICatalogRepository):
     async def reorder_learning_items(
         self, course_id: str, lesson_id: str, ordered_item_ids: list[str]
     ) -> bool:
+        _ = course_id
         for idx, item_id in enumerate(ordered_item_ids):
             stmt = (
                 select(LearningItemModel)
@@ -1190,11 +1215,11 @@ class SQLAlchemyCatalogRepository(ICatalogRepository):
             collab.role = role
         else:
             collab = CourseCollaboratorModel(
-                id=f"collab_{uuid.uuid4().hex[:12]}",
+                id=f"collab_{uuid7().hex[:12]}",
                 course_id=course_id,
                 user_id=user_id,
                 role=role,
-                created_at=datetime.now(timezone.utc).isoformat(),
+                created_at=datetime.now(UTC).isoformat(),
             )
             self.session.add(collab)
         await self.session.commit()
@@ -1239,3 +1264,110 @@ class SQLAlchemyCatalogRepository(ICatalogRepository):
                 }
             )
         return result
+
+    async def create_audit_log(
+        self,
+        course_id: str,
+        actor_id: str,
+        target_user_id: str,
+        action: str,
+        details: str = "",
+    ) -> CourseAuditLogModel:
+        now_str = datetime.now(UTC).isoformat()
+        log_model = CourseAuditLogModel(
+            id=f"calog_{uuid7().hex[:12]}",
+            course_id=course_id,
+            actor_id=actor_id,
+            target_user_id=target_user_id,
+            action=action,
+            details=details,
+            created_at=now_str,
+        )
+        self.session.add(log_model)
+        await self.session.flush()
+        return log_model
+
+    async def list_audit_logs(self, course_id: str, limit: int = 100) -> list[dict]:
+        stmt = (
+            select(CourseAuditLogModel)
+            .where(CourseAuditLogModel.course_id == course_id)
+            .order_by(CourseAuditLogModel.created_at.desc())
+            .limit(limit)
+        )
+        res = await self.session.execute(stmt)
+        logs = res.scalars().all()
+        if not logs:
+            return []
+
+        user_ids = set()
+        for item in logs:
+            user_ids.add(item.actor_id)
+            user_ids.add(item.target_user_id)
+
+        user_names = {}
+        if user_ids:
+            user_stmt = select(UserModel.id, UserModel.full_name).where(
+                UserModel.id.in_(list(user_ids))
+            )
+            user_res = await self.session.execute(user_stmt)
+            user_names = dict(user_res.tuples().all())
+
+        return [
+            {
+                "id": item.id,
+                "course_id": item.course_id,
+                "actor_id": item.actor_id,
+                "actor_name": user_names.get(item.actor_id, "Hệ thống"),
+                "target_user_id": item.target_user_id,
+                "target_user_name": user_names.get(item.target_user_id, "Thành viên"),
+                "action": item.action,
+                "details": item.details or "",
+                "created_at": item.created_at,
+            }
+            for item in logs
+        ]
+
+    async def get_enrolled_user_ids(self, course_ids: list[str]) -> list[str]:
+        if not course_ids:
+            return []
+        from src.modules.learning.infrastructure.models import LearningProgressModel
+
+        stmt = select(LearningProgressModel.user_id).where(
+            LearningProgressModel.course_id.in_(course_ids)
+        )
+        res = await self.session.execute(stmt)
+        return list(res.scalars().all())
+
+    async def clear_course_outline(self, course_id: str) -> bool:
+        from src.modules.catalog.infrastructure.models import WeekModuleModel
+
+        stmt = select(WeekModuleModel).where(WeekModuleModel.course_id == course_id)
+        res = await self.session.execute(stmt)
+        for wm in res.scalars().all():
+            await self.session.delete(wm)
+        await self.session.commit()
+        return True
+
+    async def get_quiz_questions_for_export(self, quiz_matrix_id: str) -> list[dict]:
+        if not quiz_matrix_id:
+            return []
+        try:
+            from src.modules.assessment.infrastructure.models import QuestionModel
+
+            stmt = select(QuestionModel).where(QuestionModel.bank_id == quiz_matrix_id)
+            res = await self.session.execute(stmt)
+            questions = res.scalars().all()
+            return [
+                {
+                    "id": q.id,
+                    "question": q.text,
+                    "options": [opt.option_text for opt in q.options]
+                    if hasattr(q, "options") and q.options
+                    else [],
+                    "correctOptionIndex": 0,
+                    "explanation": q.explanation or "",
+                }
+                for q in questions
+            ]
+        except Exception:  # noqa: BLE001
+            return []

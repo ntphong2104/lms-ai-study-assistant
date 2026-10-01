@@ -1,6 +1,7 @@
 import pytest
-from src.modules.forum.application.forum_usecase import ForumUseCase
-from src.modules.forum.domain.entities import ForumReplyEntity, ForumThreadEntity
+
+from src.modules.forum.application import ForumUseCase
+from src.modules.forum.domain import ForumReplyEntity, ForumThreadEntity
 
 
 class MockForumRepository:
@@ -90,7 +91,6 @@ async def test_forum_update_sets_is_edited():
         title="Updated Title",
         content="Updated Content",
         current_user_id="user_123",
-        is_staff=False,
     )
     assert updated is not None
     assert updated.title == "Updated Title"
@@ -111,7 +111,6 @@ async def test_forum_update_sets_is_edited():
         reply_id=reply.id,
         content="Updated Reply Content",
         current_user_id="user_123",
-        is_staff=False,
     )
     assert updated_reply is not None
     assert updated_reply.content == "Updated Reply Content"
@@ -141,5 +140,32 @@ async def test_forum_update_permission_denied_for_other_user():
             title="Hacked Title",
             content="Hacked Content",
             current_user_id="user_attacker",
-            is_staff=False,
         )
+
+
+@pytest.mark.asyncio
+async def test_forum_repository_vote_post_integrity_error():
+    from unittest.mock import AsyncMock, MagicMock
+
+    from sqlalchemy.exc import IntegrityError
+
+    from src.modules.forum.infrastructure.repository import ForumRepository
+
+    mock_session = AsyncMock()
+    mock_session.add = MagicMock()
+    mock_res_vote = MagicMock()
+    mock_res_vote.scalar_one_or_none.return_value = None
+
+    mock_res_count = MagicMock()
+    mock_res_count.scalar_one_or_none.return_value = 5
+
+    mock_session.execute.side_effect = [
+        mock_res_vote,
+        IntegrityError("INSERT STATEMENT", params={}, orig=Exception("duplicate key")),
+        mock_res_count,
+    ]
+
+    repo = ForumRepository(mock_session)
+    count = await repo.vote_post(post_id="thread-dl-01", user_id="user_learner_demo")
+    assert count == 5
+    mock_session.rollback.assert_awaited_once()

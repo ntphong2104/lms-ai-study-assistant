@@ -4,12 +4,12 @@ from connectrpc.request import RequestContext
 
 from src.gen.assessment.v1 import assessment_pb as pb
 from src.gen.assessment.v1.assessment_connect import AssessmentService
-from src.modules.assessment.application.assessment_usecase import AssessmentUseCase
-from src.modules.assessment.domain.constants import (
+from src.modules.assessment.application import AssessmentUseCase
+from src.modules.assessment.domain import (
     DEFAULT_PASSING_THRESHOLD_PERCENT,
     MAX_QUIZ_ATTEMPTS_BEFORE_COOLDOWN,
+    RubricCriteria,
 )
-from src.modules.assessment.domain.entities import RubricCriteria
 from src.shared.auth import CurrentUser, require_current_user
 
 
@@ -36,17 +36,12 @@ class AssessmentHandler(AssessmentService):
         ctx: RequestContext[pb.SubmitGradedQuizRequest, pb.SubmitGradedQuizResponse],
     ) -> pb.SubmitGradedQuizResponse:
         current_user = require_current_user()
-        qa_list = (
-            [list(qa.selected_option_indexes) for qa in request.question_answers]
-            if request.question_answers
-            else None
-        )
+        qa_list = [list(qa.selected_option_indexes) for qa in request.question_answers]
 
         try:
             res = await self.use_case.submit_graded_quiz(
                 user_id=current_user.id,
                 item_id=request.item_id,
-                selected_option_indexes=list(request.selected_option_indexes),
                 question_answers=qa_list,
                 session_seed=request.session_seed or None,
                 start_time_iso=request.start_time_iso or None,

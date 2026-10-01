@@ -75,10 +75,38 @@ Tài liệu này đặc tả chi tiết và chuyên sâu các yêu cầu chức 
 ### 1.7. Luồng Đăng ký & Đăng nhập lai (Google OAuth2 & Mật khẩu Dự phòng)
 * **Khái niệm & Luồng Nghiệp vụ:**
   - **Đăng ký linh hoạt 2 Phương thức**: Hệ thống hỗ trợ cả đăng ký Email/Mật khẩu truyền thống (RPC `Register`) và đăng ký nhanh qua Google OAuth2 (`GoogleRegisterVerify`).
+  - **Ràng buộc Mật khẩu An toàn (`validate_password`)**: Tất cả các thao tác khởi tạo/đặt lại mật khẩu (`Register`, `CompleteGoogleRegistration`, `CompleteResetPassword`) đều phải vượt qua bộ thẩm định mật khẩu trung tâm: độ dài tối thiểu 6 ký tự, có ít nhất 1 chữ cái in hoa (`A-Z`) và 1 chữ số (`0-9`). Giao diện Frontend hiển thị các gợi ý yêu cầu mật khẩu thời gian thực (Real-time hints).
+  - **Giới hạn Đăng nhập Thất bại (Login Rate Limiter)**: Chức năng Đăng nhập (`Login`) được bảo vệ bằng Redis Sliding Window Limiter. Nếu người dùng đăng nhập sai quá 5 lần trong 15 phút, tài khoản/IP sẽ bị khóa 15 phút và hiển thị đếm ngược thời gian chờ trên UI.
   - **Đăng ký qua Google (Step 1)**: Người dùng xác minh email chính chủ qua Google OAuth2 (`GoogleRegisterVerify`).
   - **Thiết lập Mật khẩu Dự phòng (Step 2)**: Ngay sau khi xác minh Google thành công, người dùng khởi tạo Mật khẩu dự phòng (`CompleteGoogleRegistration`). Điều này đảm bảo tài khoản trong DB luôn sở hữu `password_hash`, cho phép đăng nhập độc lập bất kỳ lúc nào ngay cả khi dịch vụ Google bị sự cố (Disaster Recovery).
   - **Đăng nhập 2 Chế độ (Dual Login Options)**: Hỗ trợ nút bấm **Google 1-click** (`GoogleLogin`) và ô nhập **Email & Mật khẩu** truyền thống (`Login`).
   - **Đồng bộ Ảnh đại diện (Google Avatar Synchronization)**: Tự động trích xuất ảnh đại diện chính chủ từ Google (`picture`), lưu trữ vào DB và đồng bộ lên toàn bộ giao diện Navbar Header (`UserDropdown`) và Hồ sơ cá nhân.
+
+
+### 1.8. Hệ thống Quản lý Lời mời Gia nhập (Invitation Management System)
+* **Khái niệm & Phạm vi Nghiệp vụ:** Cung cấp cơ chế gửi lời mời qua Email để tuyển dụng/cấp quyền cho 3 đối tượng nghiệp vụ chính: Thành viên Tổ chức (`ORGANIZATION_MEMBER`), Giảng viên đồng hành Khóa học (`COURSE_CO_INSTRUCTOR`), và Suất học Doanh nghiệp (`ENTERPRISE_SEAT`).
+* **Phân quyền Phân cấp Lời mời (Role-Based Invitation Restrictions):**
+  * **Tổ chức (Organization)**: Org Owner gửi lời mời thành viên với vai trò `INSTRUCTOR`, `MEMBER`. Nghiêm cấm gửi lời mời cho vai trò `ORG_OWNER`.
+  * **Khóa học (Course)**: Chủ sở hữu / Giảng viên khóa học gửi lời mời làm `CO_INSTRUCTOR`, `TA`... Nghiêm cấm gửi lời mời cho vai trò `COURSE_OWNER`.
+  * **Suất học Doanh nghiệp (Enterprise Seat)**: Chỉ Quản trị viên hệ thống (Super Admin) mới có quyền khởi tạo và gửi lời mời kích hoạt Suất học Doanh nghiệp. Hệ thống tự động kiểm tra hạn mức `used_seats < total_seats` và ghi nhận tăng nguyên tử số suất đã dùng khi người nhận chấp nhận lời mời.
+* **Mã hóa Token SHA-256 & Vòng đời Đơn kỳ (Single-Use Token Lifecycle):**
+  * Token lời mời ngẫu nhiên (`inv_tok_<uuid>`) chỉ tồn tại tạm thời trên bộ nhớ và được gửi qua link. Trong Database chỉ lưu trữ chuỗi băm Hex SHA-256 của token (`token_hash`), chống lộ token khi bị rò rỉ cơ sở dữ liệu.
+  * Lời mời có thời hạn mặc định 7 ngày (`DEFAULT_INVITATION_EXPIRATION_DAYS = 7`). Khi quá hạn, trạng thái tự động chuyển sang `EXPIRED`.
+* **Luồng Trải nghiệm Người nhận chưa có tài khoản (Unregistered Invitee Onboarding):**
+  * Người chưa có tài khoản bấm vào link lời mời `https://<domain>/invitations/<token>` sẽ được chuyển hướng tới trang chấp nhận công khai (`AUTH_POLICY_PUBLIC`).
+  * Người dùng bấm nút **Đăng ký** sẽ tự động được điền sẵn Email và gắn kèm `invite_token`. Ngay sau khi đăng ký thành công, hệ thống tự động hoàn tất chấp nhận lời mời và cấp quyền ngay lập tức mà không cần người dùng thao tác lại.
+  * Nếu đăng nhập sai email so với email trên lời mời, giao diện hiển thị cảnh báo đỏ yêu cầu chuyển đổi tài khoản.
+* **Tự động Phát Thông báo Hệ thống In-App (In-App Invitation Notification Dispatching):**
+  * Khi khởi tạo lời mời mới (`SendInvitation`), nếu email của người nhận trùng khớp với một tài khoản người dùng đã có sẵn trên hệ thống (`invitee_id`), hệ thống sẽ tự động gửi một thông báo danh mục `SYSTEM` trực tiếp tới tài khoản đó kèm đường dẫn liên kết `/invitations/{token}` để người dùng nhận được thông báo tức thì trên thanh điều hướng Header Navbar.
+
+### 1.9. Quản lý & Rời Thành viên Tổ chức (Organization Member Management & Voluntary Leave)
+* **Khái niệm & Phạm vi Nghiệp vụ:** Cung cấp cơ chế quản lý tư cách thành viên nội bộ của Tổ chức Đối tác thông qua RPC `RemoveOrganizationMember`.
+* **Kick Thành viên (Remove Member):**
+  * Thao tác xóa thành viên khỏi Tổ chức do **Chủ sở hữu Tổ chức (`ORG_OWNER`)** hoặc **Super Admin** thực hiện tại giao diện `/organizations/[slug]/members`.
+  * Ràng buộc bảo vệ: Nghiêm cấm Kick tài khoản có vai trò `ORG_OWNER` khác khỏi Tổ chức. Giảng viên (`INSTRUCTOR`) không có quyền Kick thành viên.
+* **Tự nguyện Rời Tổ chức (Voluntary Self-Leave):**
+  * Thành viên (`INSTRUCTOR` hoặc `MEMBER`) có quyền tự nguyện rút khỏi Tổ chức bất kỳ lúc nào (`user_id == current_user.id`).
+  * Ràng buộc bảo vệ: Tài khoản `ORG_OWNER` duy nhất không thể tự rời Tổ chức khi chưa chuyển nhượng quyền sở hữu.
 
 ---
 
@@ -133,8 +161,11 @@ flowchart TD
    * **Phân quyền Quản lý:** Tất cả các thao tác tạo/sửa/xóa Ngân hàng câu hỏi và thiết lập Ma trận đề thi bắt buộc phải thông qua kiểm tra phân quyền Giảng viên (`INSTRUCTOR`), Trợ giảng (`TA`) hoặc Quản trị viên (`ADMIN`).
    * **Timed Quiz Server-side (`StartGradedQuizSession`):** Khởi tạo phiên thi đếm ngược đồng bộ từ Server (`BR_QUIZ_003`), tự động cấp `session_seed` để phục vụ lấy mẫu đề thi và chấm điểm chuẩn xác.
 2. **Auto-Graded Lab Builder (Dành cho bài tập lập trình):**
-   * Giảng viên tải lên bộ Test Cases và File mẫu (Starter Code).
-   * Cấu hình môi trường chạy (Python, Node.js...) và giới hạn tài nguyên (Timeout, Memory Limit).
+   * **Soạn thảo Đề bài Markdown (Markdown Description Editor & Live Preview):** Giảng viên soạn thảo Mô tả bài lab, công thức, ví dụ input/output và ràng buộc bài toán theo chuẩn Markdown với giao diện Live Preview 2 cột song song.
+   * **Bộ dựng Test Case trực quan (Visual Test Case Builder):** Thêm, chỉnh sửa, xóa và chuyển đổi trạng thái Công khai / Ẩn (`Visible / Hidden`) cho từng Test Case qua giao diện form trực quan. Hỗ trợ tùy chọn chỉnh sửa cấu hình JSON thô khi cần nâng cao.
+   * **Ràng buộc & Tự động Ẩn Test Case (`BR_AUTOGRADE_001`):** Yêu cầu tối thiểu 3 Test Cases cho mỗi bài lab. Tự động chuyển 1/3 Test Case cuối thành bài kiểm tra ẩn (Hidden) nếu Giảng viên không thiết lập thủ công.
+   * **Bảo mật Học viên & Masking Log:** Che hoàn toàn thông tin Input/Output của các Test Cases ẩn trong bảng log thi hành bài nộp của Học viên.
+   * **Cấu hình Môi trường & Starter Code:** Thiết lập file mẫu ban đầu (`Starter Code`), ngôn ngữ lập trình (Python, Node.js, C++...) và giới hạn tài nguyên (Timeout 30s, Memory 512MB).
 3. **Peer-Graded Assignment Builder:**
    * Giảng viên soạn đề bài nộp dự án (yêu cầu đính kèm file, văn bản hoặc link).
    * **Bộ tiêu chí Rubric:** Giảng viên chia các tiêu chí chấm điểm chi tiết (ví dụ: Tiêu chí 1: Cấu trúc code - Max 5 điểm; Tiêu chí 2: Giao diện - Max 5 điểm) kèm hướng dẫn chi tiết cho học viên chấm chéo.
@@ -166,6 +197,8 @@ flowchart TD
   * Phụ đề cuộn tự động theo lời nói trong video. Bấm vào dòng phụ đề để nhảy đến giây video tương ứng.
   * Học viên có thể bôi đen (Highlight) từ/cụm từ trong phụ đề hoặc bài đọc để lưu lại thành **Ghi chú cá nhân (Personal Notes)**.
 * **In-Video Quiz Experience:** Video tự dừng tại mốc thời gian chèn quiz. Học viên chọn đáp án và bấm "Submit" để xem giải thích và tiếp tục xem video.
+* **Theo dõi & Lưu vết Tiến độ Bài học (Granular Item Completion Tracking):**
+  * Khi học viên hoàn thành bài học (xem video, đọc bài đọc hoặc thi quiz đạt điểm Pass), hệ thống lưu vết bản ghi trạng thái hoàn thành item (`user_item_completions`) với cặp khóa duy nhất `(user_id, item_id)` và thời điểm `completed_at` để tính toán phần trăm tiến độ hoàn thành khóa học chính xác và bảo lưu lâu dài.
 
 ### 3.2. Cơ chế Học tập Linh hoạt & Reset Deadlines (Flexible Weekly Schedule)
 * **Hạn nộp linh hoạt (Flexible Deadlines):** Mỗi tuần học có hạn nộp gợi ý (Suggested Deadlines) để học viên duy trì tiến độ.
@@ -178,7 +211,7 @@ flowchart TD
 
 ### 3.5. Phân hệ Đánh giá Năng lực (Assessments Sub-system)
 * **Cam kết Liêm chính Học thuật (Academic Honor Code):** Bắt buộc tích chọn xác nhận trước khi làm bài. Nếu từ chối (`is_agreed = False`), hệ thống chặn nộp bài và trả về thông báo lỗi kèm điểm số 0.
-* **Graded Quiz:** Ngân hàng câu hỏi xáo trộn (`BR_QUIZ_002`), đồng đồng đếm ngược Server-side (`BR_QUIZ_003`), tự động chấm điểm và áp dụng nguyên tắc *Highest Score Wins* (giữ điểm thi cao nhất). Học viên trượt 3 lần phải chờ hết 8h Cooldown; học viên đã đạt điểm Pass (>= 80%) có thể thi lại cải thiện điểm mà không bị áp dụng Cooldown (`BR_QUIZ_001`).
+* **Graded Quiz:** Ngân hàng câu hỏi xáo trộn (`BR_QUIZ_002`), đồng bộ đếm ngược Server-side (`BR_QUIZ_003`), tự động chấm điểm và áp dụng nguyên tắc *Highest Score Wins* (giữ điểm thi cao nhất). Cho phép làm lại không giới hạn lượt thi không giới hạn cooldown (`BR_QUIZ_001`). Hỗ trợ quy trình 2 bước: Màn hình Tổng quan bài thi (hiển thị kết quả cao nhất đã làm) -> Chế độ Làm bài Tập trung (Full-Focus Mode).
 * **Auto-Graded Lab:** Học viên tải file code lên -> Sandbox gửi tới Auto-Grader chạy Test Cases -> Trả về danh sách Pass/Fail test cases, log stdout/stderr và điểm số tức thì.
 * **Peer-Graded Assignment Sub-system:**
   1. **Nộp bài:** Học viên nộp bài dự án trước deadline.
@@ -227,6 +260,10 @@ flowchart TD
     * 🔔 `SYSTEM`: `/become-an-instructor` (Trang xem kết quả Phê duyệt Hồ sơ Giảng viên).
     * 📖 `ACADEMIC`: `/financial-aid` (Trang quản lý & xem Đơn xin Hỗ trợ Tài chính đã được chấp thuận).
   * *Xử lý liên kết hỏng (Broken Link Graceful Fallback):* Nếu nội dung gốc đã bị gỡ bỏ hoặc xóa khỏi hệ thống, Frontend tự động điều hướng về màn hình danh sách tổng tương ứng kèm thông báo cảnh báo Toast: *"Nội dung này không còn tồn tại hoặc đã bị gỡ bỏ."*
+* **Kiến trúc Kỹ thuật Điều phối Sự kiện (In-Memory Domain Event Bus & UUIDv7):**
+  * *Tách rời Bounded Context (DDD Decoupling):* Các module nghiệp vụ (`assessment`, `catalog`, `certificate`, `identity`, `forum`) tuyệt đối không import trực tiếp `NotificationUseCase`. Sau khi commit transaction chính thành công, Use Case chỉ phát sinh `DomainEvent` (`QuizSubmittedDomainEvent`, `CertificateIssuedDomainEvent`, `InvitationSentDomainEvent`...) ra `EventBus` chung.
+  * *Định danh Sự kiện Tuần tự (UUIDv7 RFC 9562):* Mọi Domain Event được gán `event_id` dạng **UUIDv7** (chứa 48-bit Unix timestamp mili-giây) đảm bảo khả năng tự sắp xếp theo thời gian (k-sortable) và tối ưu B-Tree indexing.
+  * *Cô lập Lỗi Toàn diện (Fault Isolation):* `EventBus` thực thi các notification subscriber độc lập trong khối `try...except` an toàn; mọi sự cố tại tầng thông báo được ghi log và tuyệt đối không bao giờ làm gián đoạn hoặc rollback luồng nghiệp vụ cốt lõi của người dùng.
 * **Chính sách Ưu tiên & Cài đặt Tùy chọn Nhận Thông báo (User Preferences):**
   * *Thông báo Bắt buộc (Mandatory):* Thông báo hệ thống `SYSTEM` (duyệt giảng viên) là BẮT BUỘC, luôn được phát tới người dùng mà không bị ảnh hưởng bởi tùy chọn cá nhân.
   * *Thông báo Tùy chọn (Configurable):* Người dùng có quyền bật/tắt nhận thông báo cho các danh mục `ANNOUNCEMENT`, `COMMUNITY`, `ACADEMIC` trên từng kênh (Nội sàn In-App, Email) thông qua Modal `NotificationPreferencesModal` (`BR_NOTIF_006`).

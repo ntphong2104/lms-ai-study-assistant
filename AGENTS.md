@@ -5,16 +5,11 @@ This file provides rules, architectural conventions, and workspace instructions 
 ---
 
 ## 1. Project Architecture (DDD & Modular Monolith)
-- We follow the **Modular Monolith** pattern using **Domain-Driven Design (DDD)** principles.
-- The backend source code is located in `backend/src/`.
-- All modules/bounded contexts reside inside `backend/src/modules/` (e.g., `catalog`, `learning`).
-- Every module must maintain strict DDD layer boundaries:
-  - **`domain/`**: Pure Python containing entities, value objects, domain events, and repository interfaces. **No external framework or database dependencies.**
-  - **`application/`**: Use Case coordinators executing domain actions.
-  - **`presentation/`**: Network-specific code (e.g., ConnectRPC stubs handlers).
-  - **`infrastructure/`**: Database ORM models, repository implementations, external service integrations.
-- Common/shared utilities and base abstractions (like base `Entity` and `ValueObject`) reside in the Shared Kernel: `backend/src/shared/`.
-- **No direct internal coupling**: Modules must not import from another module's internal directories (`application`, `infrastructure`, `presentation`).
+- We follow the **Modular Monolith** pattern using **Domain-Driven Design (DDD)** principles in `backend/src/modules/`.
+- **4 Layers**: `domain/`, `application/`, `presentation/`, `infrastructure/` (Shared Kernel in `src/shared/`).
+- **Cross-Module Communication**:
+  - **Asynchronous (Side-effects)**: In-memory `EventBus` (`src.shared.infrastructure.event_bus`) and typed `DomainEvent`.
+  - **Synchronous (Direct Queries)**: Target module's Public Domain Interface (`domain/`).
 - **Database & Alembic Migration Protocol (STRICT ORDERING RULE — MUST FOLLOW IN SEQUENCE)**:
   1. Ensure all module infrastructure model files (`src/modules/<module_name>/infrastructure/models.py`) are explicitly imported in `backend/alembic/env.py`.
   2. Modify the SQLAlchemy ORM model (`infrastructure/models.py`).
@@ -125,7 +120,8 @@ This file provides rules, architectural conventions, and workspace instructions 
   - Decorative icons MUST include `aria-hidden="true"`, and icon-only buttons MUST have `aria-label` on their interactive parent element.
 - **Standardized UI Component & Primitive Reuse Protocol**:
   - **Design System First**: Interactive UI controls, form elements, and structural data layouts (e.g., buttons, text inputs, selects, textareas, modals, badges, data tables) **MUST** prefer reusable design system primitives in `frontend/src/components/ui/` over custom ad-hoc raw HTML markup.
-  - **Semantic Token & Accessibility Consistency**: Custom primitives in `components/ui/` serve as the single source of truth for 3-tier semantic design tokens, focus states, and WAI-ARIA accessibility across the application.
+  - **Mandatory Pre-Coding Primitive Audit Rule**: Before creating or editing any page, form, modal, or component in `frontend/src/`, agents **MUST** explicitly audit `frontend/src/components/ui/` to identify pre-built design system primitives (`Button`, `Input`, `Select`, `Textarea`, `Modal`, `Table`, `Badge`, `AlertDialog`, `Tabs`, `Toast`). Writing custom raw HTML form controls (`<button>`, `<input>`, `<select>`, `<textarea>`) when a corresponding design system primitive exists in `@/components/ui/` is **strictly prohibited**.
+  - **Semantic Token & Accessibility Consistency**: Custom primitives in `components/ui/` serve as the single source of truth for 3-tier Semantic Design Tokens, focus states, and WAI-ARIA accessibility across the application.
   - **Pragmatic Flexibility**: Native HTML tags remain appropriate for hidden utility controls (e.g., hidden file inputs), rich canvas/media runners, specialized text editors, or low-level layout overrides where design system wrapping would introduce unnecessary styling overhead.
 - **Unstyled Base UI Primitive Rule (`@base-ui/react`)**:
   - When building or extending reusable UI primitive components in `frontend/src/components/ui/` (e.g., Modals, Selects, Tabs, Menus, Checkboxes, RadioGroups, Tooltips, Accordions, Fields/Inputs, Buttons, Avatars, ProgressBars, Toasts), developers and agents **MUST** leverage unstyled primitives from **Base UI (`@base-ui/react`)** whenever supported.

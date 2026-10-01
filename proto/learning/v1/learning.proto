@@ -71,10 +71,17 @@ message ListPersonalNotesResponse {
   repeated PersonalNote notes = 1;
 }
 
+message DeletePersonalNoteRequest {
+  string note_id = 1;
+}
+
+message DeletePersonalNoteResponse {
+  bool success = 1;
+}
+
 message MarkItemCompleteRequest {
   string course_id = 1;
   string item_id = 2;
-  int32 total_course_items = 3;
 }
 
 message MarkItemCompleteResponse {
@@ -108,6 +115,9 @@ service LearningService {
     option (auth.v1.policy) = AUTH_POLICY_AUTHENTICATED;
   }
   rpc ListPersonalNotes(ListPersonalNotesRequest) returns (ListPersonalNotesResponse) {
+    option (auth.v1.policy) = AUTH_POLICY_AUTHENTICATED;
+  }
+  rpc DeletePersonalNote(DeletePersonalNoteRequest) returns (DeletePersonalNoteResponse) {
     option (auth.v1.policy) = AUTH_POLICY_AUTHENTICATED;
   }
   rpc MarkItemComplete(MarkItemCompleteRequest) returns (MarkItemCompleteResponse) {

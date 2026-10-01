@@ -37,6 +37,7 @@ enum PaymentOrderStatus {
   PAYMENT_ORDER_STATUS_COMPLETED = 2;
   PAYMENT_ORDER_STATUS_FAILED = 3;
   PAYMENT_ORDER_STATUS_EXPIRED = 4;
+  PAYMENT_ORDER_STATUS_CANCELLED = 5;
 }
 
 message CoursePurchase {
@@ -86,6 +87,7 @@ message CreateVNPayPaymentUrlRequest {
   PaymentTargetType target_type = 1;
   string target_id = 2;
   PlanType plan_type = 3;
+  string return_url = 4;
 }
 
 message CreateVNPayPaymentUrlResponse {
@@ -123,10 +125,37 @@ message GetUserPaymentAccessResponse {
   UserSubscription active_subscription = 5;
 }
 
+message PaymentOrderInfo {
+  string id = 1;
+  string user_id = 2;
+  PaymentTargetType target_type = 3;
+  string target_id = 4;
+  PlanType plan_type = 5;
+  double amount = 6;
+  string currency = 7;
+  PaymentOrderStatus status = 8;
+  string vnp_txn_ref = 9;
+  string created_at = 10;
+  string updated_at = 11;
+  string target_title = 12;
+}
+
 message ListUserPurchasesRequest {}
 
 message ListUserPurchasesResponse {
   repeated CoursePurchase purchases = 1;
+  repeated PaymentOrderInfo orders = 2;
+  UserSubscription active_subscription = 3;
+}
+
+message CancelVNPayOrderRequest {
+  string vnp_txn_ref = 1;
+  string order_id = 2;
+}
+
+message CancelVNPayOrderResponse {
+  bool success = 1;
+  string message = 2;
 }
 
 service PaymentService {
@@ -146,6 +175,9 @@ service PaymentService {
     option (auth.v1.policy) = AUTH_POLICY_AUTHENTICATED;
   }
   rpc ListUserPurchases(ListUserPurchasesRequest) returns (ListUserPurchasesResponse) {
+    option (auth.v1.policy) = AUTH_POLICY_AUTHENTICATED;
+  }
+  rpc CancelVNPayOrder(CancelVNPayOrderRequest) returns (CancelVNPayOrderResponse) {
     option (auth.v1.policy) = AUTH_POLICY_AUTHENTICATED;
   }
 }

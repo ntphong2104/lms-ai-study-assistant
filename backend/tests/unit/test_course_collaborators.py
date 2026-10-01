@@ -1,8 +1,10 @@
-import pytest
 from unittest.mock import AsyncMock, patch
-from src.modules.catalog.application.catalog_usecase import CatalogUseCase
-from src.modules.catalog.domain.entities import Course, CourseStatus
-from src.modules.identity.domain.entities import User, UserRole
+
+import pytest
+
+from src.modules.catalog.application import CatalogUseCase
+from src.modules.catalog.domain import Course, CourseStatus
+from src.modules.identity.domain import User, UserRole
 from src.shared.auth import CurrentUserContext
 
 
@@ -45,6 +47,11 @@ async def test_add_course_collaborator_success():
             new_callable=AsyncMock,
             return_value=True,
         ) as mock_add,
+        patch(
+            "src.modules.catalog.infrastructure.repository.SQLAlchemyCatalogRepository.create_audit_log",
+            new_callable=AsyncMock,
+            return_value=True,
+        ),
         patch(
             "src.modules.catalog.infrastructure.repository.SQLAlchemyCatalogRepository.list_course_collaborators_with_details",
             new_callable=AsyncMock,
@@ -90,18 +97,20 @@ async def test_add_course_collaborator_permission_denied():
         status=CourseStatus.DRAFT,
     )
 
-    with patch(
-        "src.modules.catalog.infrastructure.repository.SQLAlchemyCatalogRepository.get_course_detail",
-        new_callable=AsyncMock,
-        return_value=mock_course,
+    with (
+        patch(
+            "src.modules.catalog.infrastructure.repository.SQLAlchemyCatalogRepository.get_course_detail",
+            new_callable=AsyncMock,
+            return_value=mock_course,
+        ),
+        pytest.raises(PermissionError, match="không phải là Chủ sở hữu"),
     ):
-        with pytest.raises(PermissionError, match="không phải là Chủ sở hữu"):
-            await use_case.add_course_collaborator(
-                course_id="course_101",
-                email="ta@example.com",
-                role="ta",
-                current_user=other_user,
-            )
+        await use_case.add_course_collaborator(
+            course_id="course_101",
+            email="ta@example.com",
+            role="ta",
+            current_user=other_user,
+        )
 
 
 @pytest.mark.asyncio
@@ -157,6 +166,11 @@ async def test_list_and_remove_course_collaborator():
         ),
         patch(
             "src.modules.catalog.infrastructure.repository.SQLAlchemyCatalogRepository.remove_course_collaborator",
+            new_callable=AsyncMock,
+            return_value=True,
+        ),
+        patch(
+            "src.modules.catalog.infrastructure.repository.SQLAlchemyCatalogRepository.create_audit_log",
             new_callable=AsyncMock,
             return_value=True,
         ),

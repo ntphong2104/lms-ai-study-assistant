@@ -1,10 +1,15 @@
-from typing import Sequence
+from collections.abc import Sequence
+
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from src.modules.forum.domain.entities import ForumReplyEntity, ForumThreadEntity
-from src.modules.forum.domain.repository import IForumRepository
+from src.modules.forum.domain import (
+    ForumReplyEntity,
+    ForumThreadEntity,
+    IForumRepository,
+)
 from src.modules.forum.infrastructure.models import (
     ForumReplyORM,
     ForumThreadORM,
@@ -202,6 +207,25 @@ class ForumRepository(IForumRepository):
 
         return self._to_reply_entity(orm)
 
+    async def _get_post_upvote_count(self, post_id: str) -> int:
+        thread_stmt = select(ForumThreadORM.upvote_count).where(
+            ForumThreadORM.id == post_id
+        )
+        res = await self.session.execute(thread_stmt)
+        count = res.scalar_one_or_none()
+        if count is not None:
+            return count
+
+        reply_stmt = select(ForumReplyORM.upvote_count).where(
+            ForumReplyORM.id == post_id
+        )
+        res = await self.session.execute(reply_stmt)
+        count = res.scalar_one_or_none()
+        if count is not None:
+            return count
+
+        return 0
+
     async def vote_post(
         self, post_id: str, user_id: str = "", is_upvote: bool = True
     ) -> int:
@@ -226,28 +250,32 @@ class ForumRepository(IForumRepository):
         else:
             delta = 1 if is_upvote else -1
 
-        # Apply delta to thread or reply
-        thread_stmt = select(ForumThreadORM).where(ForumThreadORM.id == post_id)
-        res = await self.session.execute(thread_stmt)
-        thread_orm = res.scalar_one_or_none()
-        if thread_orm:
-            new_count = max(0, thread_orm.upvote_count + delta)
-            thread_orm.upvote_count = new_count
-            await self.session.commit()
-            return new_count
+        try:
+            # Apply delta to thread or reply
+            thread_stmt = select(ForumThreadORM).where(ForumThreadORM.id == post_id)
+            res = await self.session.execute(thread_stmt)
+            thread_orm = res.scalar_one_or_none()
+            if thread_orm:
+                new_count = max(0, thread_orm.upvote_count + delta)
+                thread_orm.upvote_count = new_count
+                await self.session.commit()
+                return new_count
 
-        reply_stmt = select(ForumReplyORM).where(ForumReplyORM.id == post_id)
-        res = await self.session.execute(reply_stmt)
-        reply_orm = res.scalar_one_or_none()
-        if reply_orm:
-            new_count = max(0, reply_orm.upvote_count + delta)
-            reply_orm.upvote_count = new_count
-            await self.session.commit()
-            return new_count
+            reply_stmt = select(ForumReplyORM).where(ForumReplyORM.id == post_id)
+            res = await self.session.execute(reply_stmt)
+            reply_orm = res.scalar_one_or_none()
+            if reply_orm:
+                new_count = max(0, reply_orm.upvote_count + delta)
+                reply_orm.upvote_count = new_count
+                await self.session.commit()
+                return new_count
+        except IntegrityError:
+            await self.session.rollback()
+            return await self._get_post_upvote_count(post_id)
 
         return 0
 
-    async def pin_staff_answer(self, reply_id: str, ta_user_id: str) -> bool:
+    async def pin_staff_answer(self, reply_id: str, _ta_user_id: str = "") -> bool:
         stmt = select(ForumReplyORM).where(ForumReplyORM.id == reply_id)
         res = await self.session.execute(stmt)
         reply_orm = res.scalar_one_or_none()

@@ -6,12 +6,12 @@ from connectrpc.request import RequestContext
 
 from src.gen.identity.v1 import identity_pb as pb
 from src.gen.identity.v1.identity_connect import IdentityService
-from src.modules.identity.application.identity_usecase import IdentityUseCase
-from src.modules.identity.domain.entities import (
+from src.modules.identity.application import IdentityUseCase
+from src.modules.identity.domain import (
+    ApplicationStatus,
+    InstructorApplication,
     User,
     UserRole,
-    InstructorApplication,
-    ApplicationStatus,
 )
 from src.shared.auth import require_current_user
 
@@ -152,7 +152,9 @@ class IdentityHandler(IdentityService):
             avatar_url,
             is_already_registered,
             err,
-        ) = await self._use_case.google_register_verify(request.google_id_token)
+        ) = await self._use_case.google_register_verify(
+            request.authorization_code, request.nonce
+        )
         if err and not is_already_registered:
             raise ConnectError(Code.INVALID_ARGUMENT, err)
 
@@ -200,7 +202,7 @@ class IdentityHandler(IdentityService):
         ctx: RequestContext[pb.GoogleLoginRequest, pb.GoogleLoginResponse],
     ) -> pb.GoogleLoginResponse:
         user, access_token, refresh_token, err = await self._use_case.google_login(
-            request.google_id_token
+            request.authorization_code, request.nonce
         )
         if err or not user:
             raise ConnectError(Code.UNAUTHENTICATED, err or "Đăng nhập Google thất bại")
@@ -223,7 +225,9 @@ class IdentityHandler(IdentityService):
             email,
             full_name,
             err,
-        ) = await self._use_case.google_reset_password_verify(request.google_id_token)
+        ) = await self._use_case.google_reset_password_verify(
+            request.authorization_code, request.nonce
+        )
         if err:
             raise ConnectError(Code.INVALID_ARGUMENT, err)
 
@@ -266,12 +270,11 @@ class IdentityHandler(IdentityService):
     ) -> pb.GetUserProfileResponse:
         current_user = require_current_user()
         target_user_id = request.user_id or current_user.id
-        if target_user_id != current_user.id:
-            if not current_user.is_admin:
-                raise ConnectError(
-                    Code.PERMISSION_DENIED,
-                    "Bạn không có quyền xem hồ sơ cá nhân của người dùng khác.",
-                )
+        if target_user_id != current_user.id and not current_user.is_admin:
+            raise ConnectError(
+                Code.PERMISSION_DENIED,
+                "Bạn không có quyền xem hồ sơ cá nhân của người dùng khác.",
+            )
         user = await self._use_case.get_user_profile(
             target_user_id, current_user=current_user
         )
@@ -288,12 +291,11 @@ class IdentityHandler(IdentityService):
     ) -> pb.AssignEnterpriseSeatResponse:
         current_user = require_current_user()
         target_user_id = request.user_id or current_user.id
-        if target_user_id != current_user.id:
-            if not current_user.is_admin:
-                raise ConnectError(
-                    Code.PERMISSION_DENIED,
-                    "Bạn không có quyền gán suất Enterprise Seat cho người dùng khác.",
-                )
+        if target_user_id != current_user.id and not current_user.is_admin:
+            raise ConnectError(
+                Code.PERMISSION_DENIED,
+                "Bạn không có quyền gán suất Enterprise Seat cho người dùng khác.",
+            )
         success, msg = await self._use_case.assign_enterprise_seat(
             target_user_id, request.enterprise_seat_key, current_user=current_user
         )
@@ -406,7 +408,6 @@ class IdentityHandler(IdentityService):
         target_user_id = request.user_id or current_user.id
         success, msg = await self._use_case.verify_identity(
             user_id=target_user_id,
-            id_card_number=request.id_card_number,
         )
         return pb.VerifyIdentityResponse(success=success, message=msg)
 
@@ -559,6 +560,50 @@ class IdentityHandler(IdentityService):
         except PermissionError as e:
             raise ConnectError(Code.PERMISSION_DENIED, str(e))
 
+    async def list_organization_audit_logs(
+        self,
+        request: pb.ListOrganizationAuditLogsRequest,
+        ctx: RequestContext[
+            pb.ListOrganizationAuditLogsRequest,
+            pb.ListOrganizationAuditLogsResponse,
+        ],
+    ) -> pb.ListOrganizationAuditLogsResponse:
+        current_user = require_current_user()
+        org_id = request.organization_id.strip()
+        try:
+            logs = await self._use_case.list_organization_audit_logs(
+                organization_id=org_id, current_user=current_user
+            )
+            pb_logs = []
+            for item in logs:
+                action_str = item.get("action", "")
+                action_enum = pb.OrganizationAuditAction.UNSPECIFIED
+                if "JOINED" in action_str:
+                    action_enum = pb.OrganizationAuditAction.MEMBER_JOINED
+                elif "LEFT" in action_str:
+                    action_enum = pb.OrganizationAuditAction.MEMBER_LEFT
+                elif "KICKED" in action_str:
+                    action_enum = pb.OrganizationAuditAction.MEMBER_KICKED
+                elif "ROLE" in action_str:
+                    action_enum = pb.OrganizationAuditAction.ROLE_CHANGED
+
+                pb_logs.append(
+                    pb.OrganizationAuditLog(
+                        id=item.get("id", ""),
+                        organization_id=item.get("organization_id", ""),
+                        actor_id=item.get("actor_id", ""),
+                        actor_name=item.get("actor_name", ""),
+                        target_user_id=item.get("target_user_id", ""),
+                        target_user_name=item.get("target_user_name", ""),
+                        action=action_enum,
+                        details=item.get("details", ""),
+                        created_at=item.get("created_at", ""),
+                    )
+                )
+            return pb.ListOrganizationAuditLogsResponse(logs=pb_logs)
+        except PermissionError as e:
+            raise ConnectError(Code.PERMISSION_DENIED, str(e))
+
     async def remove_organization_member(
         self,
         request: pb.RemoveOrganizationMemberRequest,
@@ -578,3 +623,227 @@ class IdentityHandler(IdentityService):
             return pb.RemoveOrganizationMemberResponse(success=success)
         except PermissionError as e:
             raise ConnectError(Code.PERMISSION_DENIED, str(e))
+
+    async def list_my_organizations(
+        self,
+        request: pb.ListMyOrganizationsRequest,
+        ctx: RequestContext[
+            pb.ListMyOrganizationsRequest,
+            pb.ListMyOrganizationsResponse,
+        ],
+    ) -> pb.ListMyOrganizationsResponse:
+        current_user = require_current_user()
+        org_details = await self._use_case.list_my_organizations(
+            current_user=current_user
+        )
+        pb_orgs = [
+            pb.UserOrganizationDetail(
+                id=o["id"],
+                name=o["name"],
+                slug=o["slug"],
+                avatar_url=o["avatar_url"],
+                role_in_org=o["role_in_org"],
+                status=o["status"],
+                joined_at=o["joined_at"],
+            )
+            for o in org_details
+        ]
+        return pb.ListMyOrganizationsResponse(organizations=pb_orgs)
+
+    async def create_invitation(
+        self,
+        request: pb.CreateInvitationRequest,
+        ctx: RequestContext[
+            pb.CreateInvitationRequest,
+            pb.CreateInvitationResponse,
+        ],
+    ) -> pb.CreateInvitationResponse:
+        current_user = require_current_user()
+        type_str = (
+            _pb_type_to_str(request.type)
+            if request.type != pb.InvitationType.UNSPECIFIED
+            else ""
+        )
+        try:
+            res = await self._use_case.create_invitation(
+                invitation_type=type_str,
+                invitee_email=request.invitee_email,
+                target_id=request.target_id,
+                target_name=request.target_name,
+                role_id=request.role_id,
+                message=request.message,
+                current_user=current_user,
+            )
+            return pb.CreateInvitationResponse(invitation=_dict_to_pb_invitation(res))
+        except PermissionError as e:
+            raise ConnectError(Code.PERMISSION_DENIED, str(e))
+        except ValueError as e:
+            raise ConnectError(Code.INVALID_ARGUMENT, str(e))
+
+    async def list_sent_invitations(
+        self,
+        request: pb.ListSentInvitationsRequest,
+        ctx: RequestContext[
+            pb.ListSentInvitationsRequest,
+            pb.ListSentInvitationsResponse,
+        ],
+    ) -> pb.ListSentInvitationsResponse:
+        current_user = require_current_user()
+        type_str = (
+            _pb_type_to_str(request.type)
+            if request.type != pb.InvitationType.UNSPECIFIED
+            else ""
+        )
+        invs = await self._use_case.list_sent_invitations(
+            invitation_type=type_str,
+            target_id=request.target_id,
+            current_user=current_user,
+        )
+        return pb.ListSentInvitationsResponse(
+            invitations=[_dict_to_pb_invitation(inv) for inv in invs]
+        )
+
+    async def list_my_invitations(
+        self,
+        request: pb.ListMyInvitationsRequest,
+        ctx: RequestContext[
+            pb.ListMyInvitationsRequest,
+            pb.ListMyInvitationsResponse,
+        ],
+    ) -> pb.ListMyInvitationsResponse:
+        current_user = require_current_user()
+        status_str = (
+            _pb_status_to_str(request.status_filter)
+            if request.status_filter != pb.InvitationStatus.UNSPECIFIED
+            else ""
+        )
+        invs = await self._use_case.list_my_invitations(
+            status_filter=status_str,
+            current_user=current_user,
+        )
+        return pb.ListMyInvitationsResponse(
+            invitations=[_dict_to_pb_invitation(inv) for inv in invs]
+        )
+
+    async def get_invitation_by_token(
+        self,
+        request: pb.GetInvitationByTokenRequest,
+        ctx: RequestContext[
+            pb.GetInvitationByTokenRequest,
+            pb.GetInvitationByTokenResponse,
+        ],
+    ) -> pb.GetInvitationByTokenResponse:
+        try:
+            res = await self._use_case.get_invitation_by_token(request.token)
+            return pb.GetInvitationByTokenResponse(
+                invitation=_dict_to_pb_invitation(res)
+            )
+        except ValueError as e:
+            raise ConnectError(Code.INVALID_ARGUMENT, str(e))
+
+    async def respond_to_invitation(
+        self,
+        request: pb.RespondToInvitationRequest,
+        ctx: RequestContext[
+            pb.RespondToInvitationRequest,
+            pb.RespondToInvitationResponse,
+        ],
+    ) -> pb.RespondToInvitationResponse:
+        current_user = require_current_user()
+        try:
+            inv_dict, success, msg = await self._use_case.respond_to_invitation(
+                invitation_id=request.invitation_id,
+                action=str(request.action),
+                token=request.token,
+                current_user=current_user,
+            )
+            return pb.RespondToInvitationResponse(
+                invitation=_dict_to_pb_invitation(inv_dict) if inv_dict else None,
+                success=success,
+                message=msg,
+            )
+        except PermissionError as e:
+            raise ConnectError(Code.PERMISSION_DENIED, str(e))
+        except ValueError as e:
+            raise ConnectError(Code.INVALID_ARGUMENT, str(e))
+
+    async def cancel_invitation(
+        self,
+        request: pb.CancelInvitationRequest,
+        ctx: RequestContext[
+            pb.CancelInvitationRequest,
+            pb.CancelInvitationResponse,
+        ],
+    ) -> pb.CancelInvitationResponse:
+        current_user = require_current_user()
+        try:
+            success = await self._use_case.cancel_invitation(
+                invitation_id=request.invitation_id,
+                current_user=current_user,
+            )
+            return pb.CancelInvitationResponse(success=success)
+        except PermissionError as e:
+            raise ConnectError(Code.PERMISSION_DENIED, str(e))
+
+
+def _pb_type_to_str(type_enum: pb.InvitationType) -> str:
+    mapping = {
+        pb.InvitationType.ORGANIZATION_MEMBER: "INVITATION_TYPE_ORGANIZATION_MEMBER",
+        pb.InvitationType.COURSE_CO_INSTRUCTOR: "INVITATION_TYPE_COURSE_CO_INSTRUCTOR",
+        pb.InvitationType.ENTERPRISE_SEAT: "INVITATION_TYPE_ENTERPRISE_SEAT",
+    }
+    return mapping.get(type_enum, "")
+
+
+def _pb_status_to_str(status_enum: pb.InvitationStatus) -> str:
+    mapping = {
+        pb.InvitationStatus.PENDING: "INVITATION_STATUS_PENDING",
+        pb.InvitationStatus.ACCEPTED: "INVITATION_STATUS_ACCEPTED",
+        pb.InvitationStatus.DECLINED: "INVITATION_STATUS_DECLINED",
+        pb.InvitationStatus.CANCELLED: "INVITATION_STATUS_CANCELLED",
+        pb.InvitationStatus.EXPIRED: "INVITATION_STATUS_EXPIRED",
+    }
+    return mapping.get(status_enum, "")
+
+
+def _dict_to_pb_invitation(d: dict) -> pb.Invitation:
+    type_val = str(d.get("type", "")).upper()
+    type_enum = pb.InvitationType.UNSPECIFIED
+    if "ORGANIZATION" in type_val:
+        type_enum = pb.InvitationType.ORGANIZATION_MEMBER
+    elif "COURSE" in type_val or "CO_INSTRUCTOR" in type_val:
+        type_enum = pb.InvitationType.COURSE_CO_INSTRUCTOR
+    elif "ENTERPRISE" in type_val or "SEAT" in type_val:
+        type_enum = pb.InvitationType.ENTERPRISE_SEAT
+
+    status_val = str(d.get("status", "")).upper()
+    status_enum = pb.InvitationStatus.UNSPECIFIED
+    if "PENDING" in status_val:
+        status_enum = pb.InvitationStatus.PENDING
+    elif "ACCEPTED" in status_val:
+        status_enum = pb.InvitationStatus.ACCEPTED
+    elif "DECLINED" in status_val:
+        status_enum = pb.InvitationStatus.DECLINED
+    elif "CANCELLED" in status_val:
+        status_enum = pb.InvitationStatus.CANCELLED
+    elif "EXPIRED" in status_val:
+        status_enum = pb.InvitationStatus.EXPIRED
+
+    return pb.Invitation(
+        id=d.get("id", ""),
+        type=type_enum,
+        status=status_enum,
+        inviter_id=d.get("inviter_id", ""),
+        inviter_name=d.get("inviter_name", ""),
+        inviter_email=d.get("inviter_email", ""),
+        invitee_email=d.get("invitee_email", ""),
+        invitee_id=d.get("invitee_id", ""),
+        target_id=d.get("target_id", ""),
+        target_name=d.get("target_name", ""),
+        role_id=d.get("role_id", ""),
+        token=d.get("token", ""),
+        message=d.get("message", ""),
+        expires_at=d.get("expires_at", ""),
+        created_at=d.get("created_at", ""),
+        responded_at=d.get("responded_at", ""),
+    )

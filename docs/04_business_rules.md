@@ -26,9 +26,13 @@ Tài liệu này tập hợp và quản lý tập trung toàn bộ các quy tắ
 * **BR_AUTH_002 (Cơ chế Refresh Token Rotation):**
   * Khi `access_token` hết hạn, client gọi RPC `RefreshToken` truyền `refresh_token` hợp lệ (yêu cầu payload claim `type == "refresh"` và tồn tại `user_id` sở hữu trong DB).
   * Hệ thống hủy cặp token cũ và phát hành mới đồng thời cả `access_token` và `refresh_token`.
-* **BR_AUTH_003 (Thuật toán Mã hóa Mật khẩu & Auto-Avatar):**
-  * Mật khẩu người dùng được băm bằng PBKDF2-HMAC-SHA256 với 100,000 vòng lặp (iterations) và muối ngẫu nhiên 16 bytes, lưu dạng `salt_hex:hash_hex`. Việc xác thực mật khẩu sử dụng `hmac.compare_digest` để chống tấn công đo thời gian (Timing Attack).
+* **BR_AUTH_003 (Thuật toán Mã hóa Mật khẩu, Validation & Auto-Avatar):**
+  * **Chính sách Mật khẩu (Password Policy - `validate_password`):** Mật khẩu người dùng áp dụng ràng buộc độ mạnh bắt buộc cho các thao tác đăng ký (`Register`), hoàn tất đăng ký Google (`CompleteGoogleRegistration`) và hoàn tất đặt lại mật khẩu (`CompleteResetPassword`). Mật khẩu tối thiểu 6 ký tự (`PASSWORD_MIN_LENGTH = 6`), phải chứa ít nhất 1 chữ cái in hoa (`A-Z`) và ít nhất 1 chữ số (`0-9`). Mọi mật khẩu yếu hoặc rỗng bị từ chối ngay lập tức ở tầng Application.
+  * **Mã hóa Băm Mật khẩu:** Mật khẩu người dùng được băm bằng PBKDF2-HMAC-SHA256 với 100,000 vòng lặp (iterations) và muối ngẫu nhiên 16 bytes, lưu dạng `salt_hex:hash_hex`. Việc xác thực mật khẩu sử dụng `hmac.compare_digest` để chống tấn công đo thời gian (Timing Attack).
   * Khi người dùng đăng ký mới, hệ thống tự động sinh ảnh đại diện mặc định qua API DiceBear: `https://api.dicebear.com/7.x/avataaars/svg?seed={email}`.
+* **BR_AUTH_004 (Bảo vệ Đăng nhập & Giới hạn Tần suất Khóa Tài khoản - Redis Login Rate Limiter):**
+  * **Bộ kiểm soát Tần suất Đăng nhập (Sliding Window Rate Limiter):** Sử dụng Redis sliding window counter (`check_login_rate_limit`) để phòng chống tấn công dò mật khẩu (Brute-force Attack).
+  * **Quy tắc Khóa Tạm thời (Account Lockout):** Nếu một tài khoản hoặc IP thực hiện đăng nhập sai quá **5 lần** (`LOGIN_MAX_ATTEMPTS = 5`) liên tiếp, hệ thống tự động tạm khóa (Lockout) quyền đăng nhập trong **15 phút** (`LOGIN_LOCKOUT_SECONDS = 900` / 900 giây) và phản hồi thời gian chờ còn lại cho Client.
 * **BR_AUTH_005 (Quy tắc Xét duyệt Quyền Giảng viên Cá nhân & Gán Partner Chuẩn Coursera):**
   * *BR_AUTH_005.1 (Không cấp trực tiếp vai trò Giảng viên):* API Đăng ký công khai (`Register`) tuyệt đối không cấp trực tiếp vai trò `INSTRUCTOR`. Cá nhân muốn trở thành Giảng viên phải nộp Đơn đăng ký (`SubmitInstructorApplication`) để Super Admin thẩm định.
   * *BR_AUTH_005.2 (Ràng buộc Đơn trùng lặp):* Mỗi tài khoản `LEARNER` chỉ được giữ tối đa **01 đơn đăng ký** ở trạng thái `PENDING_REVIEW`. Nếu bị Reject, người dùng phải đợi 14 ngày hoặc cập nhật lại thông tin mới được nộp đơn mới.
@@ -36,10 +40,10 @@ Tài liệu này tập hợp và quản lý tập trung toàn bộ các quy tắ
     * Hệ thống cập nhật vai trò tài khoản thành `user.role = USER_ROLE_INSTRUCTOR`.
     * Hệ thống tự động liên kết tài khoản này vào Partner Mặc định toàn sàn **`Coursera Project Network`** (`partner_id = "partner_community"`) với trạng thái thành viên `ACTIVE`.
     * Nhờ đó, giảng viên cá nhân thỏa mãn 100% ràng buộc kiến trúc (`partner_id` NOT NULL trên bảng `courses`) và có đầy đủ quyền lựa chọn Partner này khi soạn thảo bài giảng trong Course Builder.
-* **BR_AUTH_006 (Ranh giới Phân quyền Đơn Tổ chức của Organization Admin - Single-Tenant Authorization Boundary):**
-  * **Thẩm quyền Hạn định theo Tổ chức (Tenant-Scoped Authority):** Quản trị viên Tổ chức (`Organization Admin`) chỉ có thẩm quyền quản lý thành viên, xét duyệt đơn gia nhập nội bộ, phân bổ Suất học Enterprise Seat, phê duyệt khóa học hoặc xem báo cáo **nguyên tử trong phạm vi Tổ chức của mình** (`current_user.organization_id == target.organization_id`).
-  * **Ranh giới Bất khả Xâm phạm (Cross-Tenant & Platform Boundary):** Quản trị viên Tổ chức **TUYỆT ĐỐI KHÔNG CÓ QUYỀN** xem, thẩm định hoặc phê duyệt các yêu cầu/đơn đăng ký của người dùng thuộc Tổ chức khác hoặc người dùng cá nhân tự do ngoài phạm vi tổ chức của mình.
-  * **Phân định Duyệt Đơn Giảng viên Cá nhân:** Các đơn xin cấp quyền Giảng viên cá nhân toàn sàn (`SubmitInstructorApplication`) thuộc thẩm quyền thẩm định độc quyền của **Super Admin (Ban Quản trị Nền tảng)** để gán vào `Coursera Project Network` (`partner_community`). Organization Admin của các tổ chức B2B khác không có quyền can thiệp hay duyệt các đơn này.
+* **BR_AUTH_006 (Ranh giới Phân quyền Đơn Tổ chức của Organization Owner - Single-Tenant Authorization Boundary):**
+  * **Thẩm quyền Hạn định theo Tổ chức (Tenant-Scoped Authority):** Chủ sở hữu Tổ chức (`Organization Owner` / `ORG_OWNER`) có thẩm quyền quản lý thành viên, gửi/hủy lời mời, phân bổ Suất học Enterprise Seat, hoặc cập nhật Cài đặt nhận diện thương hiệu **nguyên tử trong phạm vi Tổ chức của mình** (`current_user.organization_id == target.organization_id`).
+  * **Ranh giới Bất khả Xâm phạm (Cross-Tenant & Platform Boundary):** Chủ sở hữu Tổ chức **TUYỆT ĐỐI KHÔNG CÓ QUYỀN** xem, thẩm định hoặc phê duyệt các yêu cầu/đơn đăng ký của người dùng thuộc Tổ chức khác hoặc người dùng cá nhân tự do ngoài phạm vi tổ chức của mình.
+  * **Phân định Duyệt Đơn Giảng viên Cá nhân:** Các đơn xin cấp quyền Giảng viên cá nhân toàn sàn (`SubmitInstructorApplication`) thuộc thẩm quyền thẩm định độc quyền của **Super Admin (Ban Quản trị Nền tảng)** để gán vào `Coursera Project Network` (`partner_community`). Organization Owner của các tổ chức B2B khác không có quyền can thiệp hay duyệt các đơn này.
 * **BR_ACCESS_001 (Phân quyền Audit Mode vs Paid Mode):**
   * *Audit Mode (Miễn phí):* Học viên được mở xem toàn bộ Video bài giảng, bài đọc (Reading) và làm các bài Practice Quiz. Tuy nhiên, hệ thống khóa quyền nộp bài thi Graded Quiz, bài tập Auto-Graded Lab, bài tập Peer Review và không được cấp Chứng chỉ.
   * *Paid Mode (Trả phí / Subscription):* Học viên có toàn bộ quyền làm các bài kiểm tra tính điểm, được bạn học chấm bài Peer Review và nhận Verified Certificate khi hoàn thành.
@@ -52,12 +56,12 @@ Tài liệu này tập hợp và quản lý tập trung toàn bộ các quy tắ
   * *Xử lý trùng lặp (Idempotent Activation):* Khi học viên kích hoạt lại đúng mã Enterprise Key đã sở hữu trước đó (`user.enterprise_seat_key == clean_key`), hệ thống phản hồi thành công và bảo lưu trạng thái hiện tại mà **không tăng số lượng `used_seats`** (tránh cạn kiệt suất học).
   * *Ràng buộc 1 mã duy nhất (Single Active Key):* Mỗi tài khoản học viên chỉ được phép có 1 mã Enterprise Key hoạt động tại một thời điểm (`user.enterprise_seat_key`). Trường hợp tài khoản đã có mã Enterprise khác đang kích hoạt, hệ thống sẽ từ chối và yêu cầu thu hồi (Revoke) mã cũ trước khi gán mã mới.
 * **BR_ACCESS_003 (Thu hồi & Tái cấp Suất học Enterprise Seat Recycling & Fallback):**
-  * Organization Admin / Super Admin có quyền thu hồi suất học của nhân viên/sinh viên nếu tài khoản đó chưa đạt quá 20% tiến độ khóa học trong vòng 30 ngày kể từ ngày gán mã.
+  * Organization Owner / Super Admin có quyền thu hồi suất học của nhân viên/sinh viên nếu tài khoản đó chưa đạt quá 20% tiến độ khóa học trong vòng 30 ngày kể từ ngày gán mã.
   * Khi thu hồi thành công, hệ thống tự động hủy mã gán trên người dùng cũ và thực hiện giảm bộ đếm bằng khóa giao dịch DB Atomic Update (`UPDATE enterprise_keys SET used_seats = used_seats - 1 WHERE id = :key_id AND used_seats > 0`) nhằm ngăn ngừa triệt để nguy cơ sai lệch dữ liệu do Race Condition khi thao tác đồng thời.
   * *Chuyển đổi trạng thái & Bảo lưu tiến độ:* Tài khoản bị thu hồi Suất học sẽ tự động chuyển về **Audit Mode (Miễn phí)**. Hệ thống **bảo lưu 100% tiến độ học tập (Completed Items) và Ghi chú cá nhân (Personal Notes)** của học viên. Nếu sau đó học viên tự nâng cấp Paid Mode hoặc được cấp đơn Financial Aid, toàn bộ tiến độ cũ sẽ được mở khóa lại trọn vẹn.
 * **BR_ACCESS_004 (Phân loại Trả phí Cá nhân - Mua lẻ vs Thuê bao Coursera Plus & Quy định Giá):**
   * *Mua lẻ Khóa học (Single Purchase):* Học viên thanh toán cá nhân cho 1 khóa học lẻ sẽ được cấp quyền Paid Mode cố định cho riêng khóa học đó.
-  * *Quy định Giá Mua lẻ (Course Pricing Authority):* Mức giá (`price`) và đơn vị tiền tệ (`currency`) của từng khóa học do **Giảng viên sở hữu (`owner_id`)** hoặc **Quản trị viên Tổ chức (`Organization Admin`)** thiết lập trực tiếp trong giao diện Course Builder. **Super Admin** quản lý khung giá mặc định (Default Price Tier) và chính sách khuyến mãi toàn sàn. Khi học viên thanh toán (`PurchaseCourse`), Backend truy vấn giá niêm yết trực tiếp từ `CourseModel` để khởi tạo hóa đơn thanh toán, tuyệt đối không tin tưởng giá gửi lên từ Client.
+  * *Quy định Giá Mua lẻ & Định dạng Tiền tệ (Course Pricing Authority & Numeric Precision):* Mức giá (`price`) và đơn vị tiền tệ (`currency`) của từng khóa học do **Giảng viên sở hữu (`owner_id`)** hoặc **Chủ sở hữu Tổ chức (`Organization Owner`)** thiết lập trực tiếp trong giao diện Course Builder. **Super Admin** quản lý khung giá mặc định (Default Price Tier) và chính sách khuyến mãi toàn sàn. Khi học viên thanh toán (`PurchaseCourse`), Backend truy vấn giá niêm yết trực tiếp từ `CourseModel` để khởi tạo hóa đơn thanh toán, tuyệt đối không tin tưởng giá gửi lên từ Client. Tất cả các trường dữ liệu tiền tệ (`price`, `amount`, `original_price`, `discount_amount`) trên toàn hệ thống BẮT BUỘC lưu trữ bằng kiểu dữ liệu `Numeric` (Decimal) chống sai số dấu chấm động.
   * *Gói Thuê bao (Coursera Plus Subscription):* Học viên đăng ký gói thuê bao theo tháng (`MONTHLY` - 30 ngày) hoặc theo năm (`YEARLY` - 365 ngày) được tự động mở khóa Paid Mode trên toàn bộ danh mục khóa học khả dụng trong thời gian gói thuê bao còn hiệu lực (`expires_at > now()`). Khi gói thuê bao hết hạn, tài khoản tự động rớt về Audit Mode (tiến độ học tập và ghi chú cá nhân được bảo lưu 100%).
   * *Danh mục Đủ điều kiện (Plus Eligibility):* Mỗi khóa học có cờ cấu hình `is_plus_eligible` (Mặc định `= True`). Các khóa học đặc thù bị tắt cờ này (`False`) sẽ không được mở khóa tự động qua gói Coursera Plus mà yêu cầu mua lẻ hoặc gán mã Enterprise Key riêng.
 * **BR_FAID_001 (Quy trình nộp & xét duyệt Financial Aid):**
@@ -71,6 +75,31 @@ Tài liệu này tập hợp và quản lý tập trung toàn bộ các quy tắ
   * Mỗi khóa học sở hữu cờ cấu hình `financial_aid_enabled` (Mặc định `= True`).
   * Giảng viên sở hữu khóa học (`owner_id`) hoặc Admin có quyền tắt cờ này đối với các khóa học đặc thù (khóa luyện thi chứng chỉ đắt tiền, bài lab tốn chi phí hạ tầng).
   * Khi `financial_aid_enabled = False`: Trình phát & Trang thông tin khóa học ẩn hoàn toàn liên kết/nút *"Financial Aid available"*, và RPC `ApplyFinancialAid` ở Backend từ chối tiếp nhận đơn xin học bổng cho khóa học đó.
+* **BR_INVITE_001 (Bảo mật Token SHA-256 & Vòng đời Lời mời Single-Use):**
+  * Token lời mời ngẫu nhiên (`inv_tok_<uuid>`) chỉ tồn tại tạm thời trong bộ nhớ và được gửi trực tiếp cho người nhận qua link hoặc email.
+  * Cơ sở dữ liệu tuyệt đối không lưu trữ raw token mà chỉ lưu trữ chuỗi băm SHA-256 (`token_hash = hashlib.sha256(raw_token).hexdigest()`). Việc tra cứu lời mời qua token công khai bắt buộc phải băm input trước khi query SQL (`WHERE token_hash = :hash`).
+  * Lời mời có thời hạn mặc định 7 ngày kể từ ngày khởi tạo (`expires_at = now() + 7 days`). Khi quá hạn, trạng thái lời mời tự động chuyển sang `EXPIRED`. Lời mời chỉ được phép phản hồi 1 lần duy nhất khi ở trạng thái `PENDING`.
+* **BR_INVITE_002 (Ràng buộc Phân quyền theo Vai trò & Chống trùng lặp trong Lời mời):**
+  * *Chặn gán quyền Owner:* Nghiêm cấm gửi lời mời trực tiếp qua email cho vai trò Chủ sở hữu Tổ chức (`ORG_OWNER`) và Chủ sở hữu Khóa học (`COURSE_OWNER`). Việc chuyển giao hoặc cấp thêm quyền Chủ sở hữu phải thực hiện qua quy trình thăng cấp từ danh sách thành viên nội bộ, tuyệt đối không cấp qua link lời mời công khai.
+  * *Danh sách Vai trò Hợp lệ (OrgRole Whitelist):* Lời mời Tổ chức chỉ chấp nhận 2 vai trò hợp lệ là `INSTRUCTOR` (Giảng viên) hoặc `MEMBER` (Thành viên/Học viên).
+  * *Chống gửi trùng lời mời (Deduplication Check):* Hệ thống chủ động kiểm tra và chặn gửi lời mời nếu: (1) Email người nhận đã là thành viên chính thức (`ACTIVE`) của Tổ chức, hoặc (2) Email người nhận đã có 1 lời mời đang chờ phản hồi (`PENDING`) chưa chấp nhận/từ chối.
+  * *Kiểm tra thẩm quyền người gửi:* Người gửi lời mời Tổ chức phải có quyền Owner của Tổ chức đó. Người gửi lời mời Giảng viên đồng hành phải là Owner/Co-Instructor của Khóa học hoặc Admin. Người gửi lời mời Suất học Doanh nghiệp phải có vai trò Quản trị viên (`ADMIN`).
+* **BR_INVITE_003 (Luồng Nhận Lời mời & Khớp Định danh Email):**
+  * *Khớp định danh bắt buộc:* Khi phản hồi lời mời (`RespondToInvitation`), email tài khoản đang đăng nhập (`current_user.email`) bắt buộc phải trùng khớp với email người nhận được mời (`invitee_email`). Nếu không trùng khớp, hệ thống chặn thao tác và thông báo yêu cầu chuyển đổi tài khoản.
+  * *Kích hoạt tự động cho người dùng mới:* Trường hợp người nhận chưa có tài khoản, sau khi đăng ký tài khoản thành công với mã `invite_token`, hệ thống tự động gán tài khoản vào Tổ chức / Khóa học / Suất học Doanh nghiệp ngay lập tức.
+* **BR_ORG_001 (Quy chế Kick / Loại bỏ Thành viên khỏi Tổ chức - Kick Member Boundary):**
+  * *Thẩm quyền độc quyền:* Thao tác xóa thành viên khỏi Tổ chức qua RPC `RemoveOrganizationMember` đòi hỏi thẩm quyền độc quyền của **Chủ sở hữu Tổ chức (`Organization Owner` / `ORG_OWNER`)** hoặc **Super Admin**. Giảng viên (`INSTRUCTOR`) và Thành viên (`MEMBER`) tuyệt đối không có quyền kick tài khoản khác.
+  * *Chặn Kick Chủ sở hữu (Owner Protection Guard):* Hệ thống chủ động kiểm tra và nghiêm cấm xóa tài khoản có vai trò `ORG_OWNER` khỏi Tổ chức để bảo đảm tính toàn vẹn tư cách pháp lý của đối tác.
+* **BR_ORG_002 (Quy chế Tự nguyện Rời Tổ chức - Self-Leave Organization):**
+  * *Tự nguyện rút tên:* Thành viên (`INSTRUCTOR` hoặc `MEMBER`) có quyền tự nguyện gửi yêu cầu rời khỏi Tổ chức bất kỳ lúc nào (`user_id == current_user.id`).
+  * *Ràng buộc Chủ sở hữu:* Tài khoản `ORG_OWNER` duy nhất tuyệt đối không được tự rời Tổ chức khi chưa thực hiện quy trình chuyển nhượng quyền sở hữu cho thành viên khác (ngăn ngừa nguy cơ Tổ chức bị vô chủ).
+* **BR_ORG_003 (Kiến trúc Nhật ký Bất biến 2 Tầng - 2-Layer Immutable Audit Log System):**
+  * *Tầng Trạng thái Hiện tại (`organization_members`):* Quản lý trạng thái gia nhập hiện tại (`ACTIVE`) của thành viên nhằm tối ưu tốc độ truy vấn phân quyền ($O(1)$ index lookup).
+  * *Tầng Nhật ký Bất biến (`organization_audit_logs`):* Tự động lưu vết chuỗi sự kiện không thể thay thế/sửa xóa (Append-Only Log) cho tất cả các biến động nhân sự: gia nhập (`MEMBER_JOINED`), tự rời (`MEMBER_LEFT`), bị loại bỏ (`MEMBER_KICKED`) và thay đổi vai trò (`ROLE_CHANGED`).
+  * *Bảo toàn Lịch sử Ra/Vào:* Mỗi bản ghi audit log ghi nhận đầy đủ mốc thời gian ISO8601, ID người thực hiện (Actor ID), ID người chịu tác động (Target User ID) và thông tin chi tiết. Dù người dùng rời và gia nhập lại nhiều lần, toàn bộ vết lịch sử quá khứ đều được bảo toàn 100%.
+* **BR_COURSE_003 (Nhật ký Bất biến Thành viên Đội ngũ Giảng dạy Khóa học - Course Audit Log System):**
+  * *Tầng Nhật ký Bất biến (`course_audit_logs`):* Tự động ghi vết sự kiện cho toàn bộ các thao tác thay đổi đội ngũ giảng dạy khóa học: chấp nhận gia nhập qua lời mời (`COLLABORATOR_JOINED`), được thêm trực tiếp (`COLLABORATOR_ADDED`), tự rút tên (`COLLABORATOR_REMOVED` - Self Leave), bị loại bỏ bởi Owner (`COLLABORATOR_REMOVED` - Kicked).
+  * *Kiểm tra Thẩm quyền Tra cứu:* Chỉ Giảng viên chính sở hữu khóa học (`owner_id`), Giảng viên đồng hành (`co_instructor_ids`) hoặc Admin mới có quyền gọi `ListCourseAuditLogs` để xem nhật ký lịch sử.
 
 ---
 
@@ -79,11 +108,13 @@ Tài liệu này tập hợp và quản lý tập trung toàn bộ các quy tắ
 * **BR_HONOR_001 (Xác nhận Honor Code):**
   * Hệ thống bắt buộc học viên phải tích chọn xác nhận *"Academic Honor Code"* trước khi cho phép bấm nút mở làm bài Graded Quiz, nộp bài Auto-Graded Lab, hoặc nộp bài Peer Assignment.
   * Nếu chưa xác nhận Honor Code (`is_agreed = False`), hệ thống chặn làm bài và trả về điểm số `0.0`, `passed = False`, `attempts_left = 0` cùng thông điệp yêu cầu cam kết.
-* **BR_QUIZ_001 (Quy tắc Thi lại, Nguyên tắc Điểm cao nhất & Cooldown bài Graded Quiz):**
-  * Mỗi bài Graded Quiz bắt buộc đạt tối thiểu điểm Pass (>= 80.0%) mới tính là hoàn thành.
-  * *Nguyên tắc Điểm cao nhất (Highest Score Wins):* Điểm số chính thức của bài thi luôn ghi nhận kết quả cao nhất giữa các lần thi. Học viên đã đạt điểm Pass vẫn được quyền thi lại để cải thiện điểm số mà không bị kích hoạt Cooldown 8 tiếng.
-  * *Giới hạn lượt thi & Cooldown:* Học viên được làm bài tối đa 3 lần liên tiếp khi chưa đạt điểm Pass. Nếu thi trượt cả 3 lần (`failed_attempts_count >= 3`), hệ thống kích hoạt **thời gian chờ (Cooldown) 8 tiếng** (`cooldown_until = now + 8h`, `cooldown_seconds_left = 28800`) trước khi cho phép làm lại.
-  * *Khôi phục lượt thi:* Ngay khi học viên đạt điểm Pass (>= 80.0%) hoặc hết thời gian 8 tiếng Cooldown, bộ đếm trượt `failed_attempts_count` tự động reset về `0` và khôi phục lại đủ 3 lượt thi (`attempts_left = 3`).
+* **BR_QUIZ_001 (Quy tắc Phân biệt Quiz Luyện tập & Quiz Tính điểm, Thi lại & Cooldown):**
+  * **Quiz Luyện tập (Practice Quiz - Type 3):** Phục vụ củng cố kiến thức bài học, không ảnh hưởng đến tỷ lệ hoàn thành cấp chứng chỉ. Học viên được làm lại tự do **không giới hạn số lần** và **không áp dụng Cooldown**.
+  * **Quiz Tính điểm (Graded Quiz - Type 4):** Đánh giá năng lực bài học, bắt buộc đạt tối thiểu điểm Pass (>= 80.0%) để tính vào điều kiện phát hành Chứng chỉ (Verified Certificate).
+    * *Cấu hình Giới hạn & Cooldown:* Giảng viên thiết lập số lần làm bài tối đa (`max_attempts`, mặc định 3 lần) và thời gian chờ Cooldown (`cooldown_hours`, mặc định 8 giờ).
+    * *Kích hoạt Cooldown:* Học viên làm trượt cả `max_attempts` lần liên tiếp (`failed_attempts_count >= max_attempts`), hệ thống kích hoạt Cooldown thời gian chờ (mặc định 8 tiếng) trước khi cho phép làm lại.
+    * *Nguyên tắc Điểm cao nhất (Highest Score Wins):* Điểm chính thức luôn ghi nhận kết quả cao nhất giữa các lần thi. Ngay khi học viên đạt điểm Pass (>= 80%) hoặc hết thời gian Cooldown, bộ đếm trượt reset và khôi phục lại đủ lượt thi.
+  * *Giao diện 2 bước (Overview & Full-Focus Mode):* Khi bấm chọn bài Quiz, hệ thống hiển thị trang Tổng quan bài thi (Thời gian, điểm đạt, số câu hỏi, kết quả cao nhất đã làm) trước khi bấm "Bắt đầu làm bài" để vào Chế độ Làm bài Tập trung.
 * **BR_QUIZ_002 (Quy tắc Ngân hàng Câu hỏi, Ma trận Đề thi & Xáo trộn Đáp án):**
   * Đề thi Graded Quiz được sinh tự động thông qua Ma trận đề thi (`QuizMatrix`) liên kết với Kho ngân hàng câu hỏi (`QuestionBank`).
   * *Cấu hình Ma trận:* Giảng viên/Admin thiết lập số lượng câu hỏi rút ngẫu nhiên theo từng bậc độ khó (`easy_count`, `medium_count`, `hard_count`), thời gian làm bài (`time_limit_minutes`), ngưỡng điểm đạt tùy chỉnh (`passing_threshold_percent`), và chế độ xáo trộn tùy chọn đáp án (`shuffle_options`).
@@ -93,9 +124,12 @@ Tài liệu này tập hợp và quản lý tập trung toàn bộ các quy tắ
 * **BR_QUIZ_003 (Quy tắc Quản lý Session Đếm ngược & Auto-submit):**
   * Mọi bài thi Graded Quiz có giới hạn thời gian (Timed Quiz) được quản lý thời gian đếm ngược trực tiếp từ phía Server (Server-side Session Timer) tính từ mốc bấm nút "Start Quiz".
   * Việc tải lại trang (F5) hoặc tạm đóng trình duyệt không làm dừng đồng hồ đếm ngược. Khi hết giờ đếm ngược, Server tự động đóng phiên và thực hiện chấm điểm (Auto-submit on timeout) với các câu trả lời hiện tại.
-* **BR_AUTOGRADE_001 (Quy định Sandbox Auto-Grader):**
-  * Mỗi bài nộp lập trình gửi tới Auto-Grader chạy trong môi trường Sandbox cách ly với Timeout mặc định 5.0 giây (hoặc tối đa 30 giây) và Memory Limit = 512MB.
-  * Điểm bài nộp = (Số lượng Test Cases Pass / Tổng số Test Cases) * 100%. Trả về log chi tiết stdout/stderr của từng testcase cho học viên.
+* **BR_AUTOGRADE_001 (Quy định Sandbox Auto-Grader & Bảo mật Test Case Ẩn):**
+  * **Môi trường Thực thi Cách ly (Sandbox Execution):** Mỗi bài nộp lập trình gửi tới Auto-Grader chạy trong môi trường Sandbox cách ly với Timeout mặc định 5.0 giây (tối đa 30.0 giây) và Memory Limit = 512MB.
+  * **Ràng buộc Tạo bài Lab (Lab Creation Validation):** Mỗi bài Auto-Graded Lab bắt buộc có **tối thiểu 3 Test Cases** mới được phép lưu. Trình Course Builder hỗ trợ giao diện tạo/sửa/xóa Test Cases trực quan (Visual Test Case Builder) kết hợp soạn thảo Mô tả đề bài dạng Markdown (hỗ trợ Live Preview 2 cột).
+  * **Quy tắc Tự động Ẩn (Auto-Hidden Test Cases Assignment):** Trường hợp Giảng viên không gắn cờ `is_hidden` thủ công cho bất kỳ Test Case nào, hệ thống tự động ẩn khoảng 1/3 số Test Cases cuối (tính từ chỉ số $\lceil N \times 2 / 3 \rceil$) khi bấm lưu để bảo đảm độ chính xác khi chấm bài.
+  * **Bảo mật Test Case Ẩn (Hidden Test Privacy & Log Masking):** Học viên xem được dữ liệu Input/Expected của các Test Cases công khai (`Visible`). Đối với các Test Cases ẩn (`Hidden`), thông tin Input, Expected Output và câu lệnh `assertion` bị **mask bảo mật hoàn toàn** trong Execution Logs (chỉ hiển thị trạng thái `[PASS]` hoặc `[FAIL] Test Case #X: [Hidden]`).
+  * **Tính điểm:** Điểm bài nộp = (Số lượng Test Cases Pass / Tổng số Test Cases) * 100%.
 * **BR_PEER_001 (Điều kiện Nộp & Chấm chéo Peer Review):**
   * Học viên bắt buộc phải nộp bài dự án cá nhân trước mới được phân bổ quyền chấm chéo bài của bạn học (hệ thống tự động loại trừ bài nộp của chính mình `exclude_user_id`).
   * Học viên bắt buộc phải **chấm đủ lượt bài làm theo phân bổ** $\min(3, N)$ (với $N$ là số bài nộp khả thi trong hàng chờ) thì hệ thống mới mở hiển thị điểm bài nộp của chính mình.
@@ -133,6 +167,14 @@ Tài liệu này tập hợp và quản lý tập trung toàn bộ các quy tắ
   * *Quyết định Phê duyệt hoặc Từ chối (Approve / Reject):*
     * **Phê duyệt (`Approve`):** Khóa học chuyển sang trạng thái **`PUBLISHED`** và chính thức xuất hiện trên Trang Tìm kiếm Công khai toàn cầu (`/courses`).
     * **Từ chối (`Reject`):** Reviewer nhập lý do/gợi ý chỉnh sửa (Feedback Log). Khóa học tự động chuyển về trạng thái **`DRAFT`** kèm nhật ký góp ý để Giảng viên hoàn thiện và nộp lại.
+* **BR_CATALOG_004 (Bảo vệ Khóa học Đã xuất bản & Ràng buộc Cấm Xóa - Published Course Safeguards & Deletion Restrictions):**
+  * **Ràng buộc Cấm Xóa đối với Giảng viên (Deletion Protection Guard):** Ngay khi khóa học ở trạng thái **`PUBLISHED` (Đã xuất bản)**, Giảng viên sở hữu (`owner_id`) và Giảng viên đồng hành (`co_instructor_ids`) **TUYỆT ĐỐI KHÔNG CÓ QUYỀN XÓA** khóa học, xóa tuần học (`WeekModule`), xóa bài học (`Lesson`) hoặc xóa học liệu (`LearningItem`).
+  * **Lý do Bảo vệ Dữ liệu & Tiến độ Học tập:** Tránh làm gián đoạn hoặc hỏng tiến độ học tập, điểm số bài thi, lịch sử nộp bài và chứng chỉ đã cấp cho các học viên đang học hoặc đã hoàn thành khóa học.
+  * **Phản hồi Hệ thống & Thông báo (FE & BE Notification Guard):**
+    * Phía Frontend chủ động chặn thao tác xóa và hiển thị thông báo Toast cảnh báo: *"Không thể xóa [Khóa học / Tuần học / Bài học / Học liệu] vì khóa học đã được xuất bản (PUBLISHED). Vui lòng liên hệ Quản trị viên."*
+    * Phía Backend kiểm tra đa tầng tại `CatalogUseCase._verify_ownership` và Repository DB Level. Mọi cố gắng xóa khóa học `PUBLISHED` từ phía Giảng viên đều bị từ chối và trả về ngoại lệ `PermissionError` / `ConnectError(Code.PERMISSION_DENIED)`.
+  * **Quyền Chỉnh sửa Nối tiếp (Live Content Maintenance):** Giảng viên vẫn giữ quyền chỉnh sửa nội dung mô tả, cập nhật bài đọc (Reading), sửa lỗi phụ đề VTT, video bài giảng hoặc cập nhật ngân hàng câu hỏi/ma trận đề thi để cập nhật kiến thức mới mà không ảnh hưởng tới các học viên đã tốt nghiệp.
+  * **Quy trình Gỡ/Hủy Xuất bản Khóa học (Unpublish / Archive Workflow):** Khi cần dừng nhận học viên mới hoặc gỡ khóa học khỏi danh mục công khai, Quản trị viên hệ thống (Super Admin) thực hiện chuyển trạng thái khóa học sang `UNPUBLISHED` hoặc `ARCHIVED`. Khóa học bị ẩn khỏi trang tìm kiếm công khai nhưng học viên cũ đã đăng ký vẫn giữ nguyên 100% quyền truy cập và chứng chỉ đã cấp.
 
 
 ---
@@ -148,8 +190,8 @@ Tài liệu này tập hợp và quản lý tập trung toàn bộ các quy tắ
   * *Hạn Cooldown:* Áp dụng thời gian chờ **24 giờ (Cooldown)** giữa 2 lần bấm Reset my deadlines liên tiếp để tránh việc đặt lại hạn nộp liên tục.
   * *Tự động gia hạn cho Khóa học Self-paced:* Đối với khóa học tự học (Self-paced không có mốc `Course_End_Date` cố định từ Giảng viên), `Course_End_Date` được tự động tính và gia hạn thêm **180 ngày tính từ mốc bấm nút Reset** (hoặc $7 \times \text{Tổng số tuần} + 30 \text{ ngày}$) nhằm đảm bảo hạn nộp các tuần phân bổ đều 7 ngày/tuần, triệt tiêu hoàn toàn hiện tượng dồn cục hạn nộp khi reset ở giai đoạn cuối.
   * Tất cả các trạng thái hạn nộp tự động chuyển về `ON_TRACK` mà không trừ điểm thi hay làm mất tiến độ học tập cũ.
-* **BR_LEARNING_001 (Tính toán Tiến độ & Khử trùng lặp Completed Items):**
-  * Mỗi khi hoàn thành 1 bài học (Video, Reading, Quiz), hệ thống tự động thêm `item_id` vào danh sách `completed_item_ids` (sử dụng tập hợp `set` để khử trùng lặp).
+* **BR_LEARNING_001 (Tính toán Tiến độ, Khử trùng lặp & Ràng buộc Bảng Completed Items):**
+  * Mỗi khi hoàn thành 1 bài học (Video, Reading, Quiz), hệ thống tự động lưu vết bản ghi trạng thái hoàn thành vào cơ sở dữ liệu (`user_item_completions`) với khóa chính duy nhất `(user_id, item_id)` (`uq_user_item_completion`) và timestamp `completed_at`, đồng thời thêm `item_id` vào danh sách `completed_item_ids` (sử dụng tập hợp `set` để khử trùng lặp).
   * *Xác thực danh mục Server-side (Server-side Item Validation):* Hệ thống tự động truy vấn danh mục bài học từ Catalog module (`CatalogUseCase.get_course_detail`) để lấy tập hợp bài học hợp lệ (`valid_item_ids`) và tổng số bài học thực tế (`real_total_items`). Tất cả `item_id` không nằm trong danh mục khóa học sẽ bị từ chối (`item_id in valid_item_ids`), đồng thời danh sách bài hoàn thành được lọc loại bỏ các item không còn tồn tại (`completed = completed.intersection(valid_item_ids)`). Loại bỏ hoàn toàn khả năng gửi tham số `total_course_items` tùy ý từ phía client.
   * Phần trăm tiến độ được tính toán và làm tròn 1 chữ số thập phân:
     $$\text{Overall Progress \%} = \min\left(100.0, \text{round}\left(\frac{|\text{Completed Items}|}{\max(1, \text{Total Course Items})} \times 100, 1\right)\right)$$
@@ -272,8 +314,12 @@ Tài liệu này tập hợp và quản lý tập trung toàn bộ các quy tắ
   * Hệ thống áp dụng cơ chế phân trang dựa trên token (`page_token`, `page_size`, mặc định 20, tối đa 50) để tối ưu hiệu năng và tránh tải toàn bộ dữ liệu khi danh sách lớn.
 * **BR_NOTIF_011 (Chính sách Lưu trữ & Xóa tự động Retention Policy):**
   * Các thông báo cũ quá 90 ngày (đã đọc) hoặc 365 ngày (chưa đọc) sẽ được hệ thống định kỳ lưu trữ (archive) hoặc xóa sạch để giải phóng dung lượng cơ sở dữ liệu.
-* **BR_NOTIF_012 (Tính Nguyên tử Giao dịch Nguồn Atomic Event Transaction):**
-  * Thông báo CHỈ ĐƯỢC TẠO khi sự kiện nguồn (ví dụ: duyệt giảng viên, đăng thông báo khóa học, cấp chứng chỉ) đã thực hiện thành công và commit giao dịch cơ sở dữ liệu; nếu giao dịch nguồn rollback/thất bại thì tuyệt đối không sinh thông báo mồ côi.
+* **BR_NOTIF_012 (Tính Nguyên tử & Điều phối Sự kiện Miền Atomic Domain Event Bus):**
+  * Thông báo CHỈ ĐƯỢC TẠO khi sự kiện nguồn (ví dụ: nộp bài thi, duyệt giảng viên, đăng thông báo khóa học, cấp chứng chỉ) đã thực hiện thành công và commit giao dịch cơ sở dữ liệu chính.
+  * Việc điều phối thông báo được thực hiện qua **In-Memory Domain Event Bus** (`EventBus` trong Shared Kernel). Các Domain Event được gắn mã định danh chuẩn **UUIDv7** (RFC 9562) có tính sắp xếp tuần tự theo thời gian (`event_id`) và thời điểm `occurred_at`.
+* **BR_NOTIF_013 (Tự động Phát Thông báo Lời mời & Cô lập Lỗi Fault Isolation):**
+  * Khi tạo lời mời gia nhập Organization, Course, hoặc Enterprise Seat (`SendInvitation`), nếu địa chỉ email người nhận khớp với tài khoản người dùng đã tồn tại trong hệ thống (`invitee_id`), hệ thống tự động phát bản ghi thông báo loại `SYSTEM` đến `recipient_id = invitee_id` với tiêu đề *"Lời mời tham gia {target_name}"* và `action_url = /invitations/{token}` thông qua sự kiện `InvitationSentDomainEvent`.
+  * Mọi Subscriber/Handler của `EventBus` được bọc trong cơ chế cách ly lỗi độc lập (`Fault Isolation`), ghi log chi tiết khi gặp sự cố và tuyệt đối không bao giờ làm gián đoạn hay rollback giao dịch nghiệp vụ chính.
 
 
 

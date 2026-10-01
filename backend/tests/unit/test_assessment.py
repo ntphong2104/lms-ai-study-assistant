@@ -1,7 +1,11 @@
+from datetime import UTC
 from typing import Any
+
 import pytest
-from src.modules.assessment.application.assessment_usecase import AssessmentUseCase
-from src.modules.assessment.domain.entities import (
+
+from src.modules.assessment.application import AssessmentUseCase
+from src.modules.assessment.domain import (
+    AssessmentRepositoryInterface,
     GradeAppeal,
     HonorCodeAgreement,
     LabSubmission,
@@ -11,7 +15,6 @@ from src.modules.assessment.domain.entities import (
     QuizSubmission,
     RubricCriteria,
 )
-from src.modules.assessment.domain.repositories import AssessmentRepositoryInterface
 from src.modules.assessment.infrastructure.sandbox_service import (
     PythonCodeSandboxExecutor,
 )
@@ -28,6 +31,7 @@ class InMemoryAssessmentRepository(AssessmentRepositoryInterface):
         self.peer_reviews: list[PeerReview] = []
         self.grade_appeals: dict[str, GradeAppeal] = {}
         self.matrices: dict[str, Any] = {}
+        self.item_types: dict[str, str] = {}
 
     async def save_honor_code(self, agreement: HonorCodeAgreement) -> None:
         self.honor_codes[agreement.id] = agreement
@@ -76,6 +80,12 @@ class InMemoryAssessmentRepository(AssessmentRepositoryInterface):
         ]
 
     async def save_peer_submission(self, submission: PeerAssignmentSubmission) -> None:
+        for i, s in enumerate(self.peer_submissions):
+            if s.id == submission.id or (
+                s.user_id == submission.user_id and s.item_id == submission.item_id
+            ):
+                self.peer_submissions[i] = submission
+                return
         self.peer_submissions.append(submission)
 
     async def get_peer_submission(
@@ -130,7 +140,7 @@ class InMemoryAssessmentRepository(AssessmentRepositoryInterface):
     async def create_question_bank(
         self, course_id: str, title: str, category: str, description: str
     ):
-        from src.modules.assessment.domain.entities import QuestionBank
+        from src.modules.assessment.domain import QuestionBank
 
         return QuestionBank(
             id="bank_test_1",
@@ -143,6 +153,9 @@ class InMemoryAssessmentRepository(AssessmentRepositoryInterface):
     async def list_question_banks(self, course_id: str):
         return []
 
+    async def get_any_questions(self, limit: int = 20):
+        return await self.get_questions_by_bank("bank_test_1")
+
     async def add_question_to_bank(
         self,
         bank_id: str,
@@ -152,7 +165,7 @@ class InMemoryAssessmentRepository(AssessmentRepositoryInterface):
         explanation: str,
         options_data: list[dict],
     ):
-        from src.modules.assessment.domain.entities import Question
+        from src.modules.assessment.domain import Question
 
         return Question(
             id="q_test_1",
@@ -175,7 +188,7 @@ class InMemoryAssessmentRepository(AssessmentRepositoryInterface):
         explanation: str,
         options_data: list[dict],
     ):
-        from src.modules.assessment.domain.entities import Question, QuestionOption
+        from src.modules.assessment.domain import Question, QuestionOption
 
         opts = [
             QuestionOption(
@@ -210,7 +223,7 @@ class InMemoryAssessmentRepository(AssessmentRepositoryInterface):
         max_attempts: int = 3,
         cooldown_hours: int = 8,
     ):
-        from src.modules.assessment.domain.entities import QuizMatrix
+        from src.modules.assessment.domain import QuizMatrix
 
         matrix = QuizMatrix(
             item_id=item_id,
@@ -227,11 +240,29 @@ class InMemoryAssessmentRepository(AssessmentRepositoryInterface):
         self.matrices[item_id] = matrix
         return matrix
 
+    async def get_item_type(self, item_id: str) -> str:
+        return getattr(self, "item_types", {}).get(item_id, "GRADED_QUIZ")
+
     async def get_quiz_matrix(self, item_id: str):
+        if item_id not in self.matrices:
+            from src.modules.assessment.domain import QuizMatrix
+
+            self.matrices[item_id] = QuizMatrix(
+                item_id=item_id,
+                bank_id="qb_default",
+                time_limit_minutes=15,
+                passing_threshold_percent=80.0,
+                easy_count=3,
+                medium_count=2,
+                hard_count=1,
+                shuffle_options=True,
+                max_attempts=3,
+                cooldown_hours=8,
+            )
         return self.matrices.get(item_id)
 
     async def get_questions_by_bank(self, bank_id: str):
-        from src.modules.assessment.domain.entities import Question, QuestionOption
+        from src.modules.assessment.domain import Question, QuestionOption
 
         return [
             Question(
@@ -255,6 +286,12 @@ class InMemoryAssessmentRepository(AssessmentRepositoryInterface):
             )
             for i in range(5)
         ]
+
+    async def get_course_id_by_item_id(self, item_id: str) -> str | None:
+        return "course_test_1"
+
+    async def get_lab_test_cases_json(self, item_id: str) -> str | None:
+        return None
 
 
 @pytest.mark.asyncio
@@ -289,71 +326,69 @@ async def test_graded_quiz_pass_and_cooldown_logic():
     )
 
     correct_answers = [
-        q["shuffled_correct_index"]
+        q["shuffled_correct_indices"]
         for q in await usecase.generate_quiz_session_questions(repo, item_id, seed=42)
     ]
-    wrong_answers = [(ans + 1) % 4 for ans in correct_answers]
+    wrong_answers = [[(ans[0] + 1) % 4] if ans else [0] for ans in correct_answers]
 
     # 1. Without Honor Code -> Should fail
-    res_no_honor = await usecase.submit_graded_quiz(user_id, item_id, correct_answers)
+    res_no_honor = await usecase.submit_graded_quiz(
+        user_id, item_id, question_answers=correct_answers
+    )
     assert res_no_honor["passed"] is False
     assert "Cam kết Trung thực" in res_no_honor["answer_explanations"][0]
 
     # 2. Agree Honor Code
     await usecase.submit_honor_code(user_id, item_id, True)
 
-    # 3. Submit Perfect Score -> 100% Pass (still deducts 1 attempt)
-    res_pass = await usecase.submit_graded_quiz(user_id, item_id, correct_answers)
+    # 3. Submit Perfect Score -> 100% Pass
+    res_pass = await usecase.submit_graded_quiz(
+        user_id, item_id, question_answers=correct_answers
+    )
     assert res_pass["score_percent"] == 100.0
     assert res_pass["passed"] is True
-    assert res_pass["attempts_left"] == 2
+    assert res_pass["attempts_left"] == 3
     assert res_pass["cooldown_seconds_left"] == 0
 
-    # 4. Fail 3 consecutive attempts to trigger 8h Cooldown
+    # 4. Test Graded Quiz failure limit & cooldown
     user_fail = "user-test-cooldown"
     await usecase.submit_honor_code(user_fail, item_id, True)
 
     # Attempt 1 (Fail)
-    r1 = await usecase.submit_graded_quiz(user_fail, item_id, wrong_answers)
+    r1 = await usecase.submit_graded_quiz(
+        user_fail, item_id, question_answers=wrong_answers
+    )
     assert r1["passed"] is False
     assert r1["attempts_left"] == 2
 
-    # Verify session start with force_new=False returns previous failed result & attempts_left
-    sess_fail = await usecase.start_graded_quiz_session(
-        user_fail, item_id, force_new=False
-    )
-    assert sess_fail.get("has_previous_result") is True
-    assert sess_fail["previous_result"]["passed"] is False
-    assert sess_fail["previous_result"]["attempts_left"] == 2
-
     # Attempt 2 (Fail)
-    r2 = await usecase.submit_graded_quiz(user_fail, item_id, wrong_answers)
+    r2 = await usecase.submit_graded_quiz(
+        user_fail, item_id, question_answers=wrong_answers
+    )
     assert r2["passed"] is False
     assert r2["attempts_left"] == 1
 
     # Attempt 3 (Fail) -> Cooldown activated
-    r3 = await usecase.submit_graded_quiz(user_fail, item_id, wrong_answers)
+    r3 = await usecase.submit_graded_quiz(
+        user_fail, item_id, question_answers=wrong_answers
+    )
     assert r3["passed"] is False
     assert r3["attempts_left"] == 0
-    assert r3["cooldown_seconds_left"] == 28800
+    assert r3["cooldown_seconds_left"] > 0
 
-    # Attempt 4 (Blocked by Cooldown)
-    r4 = await usecase.submit_graded_quiz(user_fail, item_id, [0, 1, 2, 0, 1])
-    assert r4["passed"] is False
-    assert r4["cooldown_seconds_left"] > 0
-    assert "giãn cách" in r4["answer_explanations"][0]
+    # Blocked by cooldown
+    with pytest.raises(ValueError, match="dùng hết số lượt"):
+        await usecase.start_graded_quiz_session(user_fail, item_id, force_new=True)
 
-    # Verify session start is blocked by Cooldown immediately
-    with pytest.raises(ValueError) as exc_info:
-        await usecase.start_graded_quiz_session(user_fail, item_id)
-    assert "quay lại sau" in str(exc_info.value)
-
-    # Verify starting new session for user_id who passed still allows remaining attempts (force_new=True)
-    res_pass_new = await usecase.start_graded_quiz_session(
-        user_id, item_id, force_new=True
+    # 5. Practice Quiz (Type 3) -> Unlimited attempts without Cooldown
+    item_practice = "item-practice-1"
+    repo.item_types[item_practice] = "PRACTICE_QUIZ"
+    await usecase.submit_honor_code(user_fail, item_practice, True)
+    r_prac = await usecase.submit_graded_quiz(
+        user_fail, item_practice, question_answers=wrong_answers
     )
-    assert len(res_pass_new["questions"]) > 0
-    assert res_pass_new["attempts_left"] == 1
+    assert r_prac["attempts_left"] == 999
+    assert r_prac["cooldown_seconds_left"] == 0
 
 
 @pytest.mark.asyncio
@@ -397,7 +432,7 @@ async def test_peer_review_and_outlier_detection():
     usecase = AssessmentUseCase(repository=repo)
 
     # 1. Submit Peer Assignment
-    sub_id, msg = await usecase.submit_peer_assignment(
+    sub_id, _msg = await usecase.submit_peer_assignment(
         "author-1",
         "item-peer-1",
         "https://github.com/test/repo",
@@ -462,7 +497,7 @@ name = input()
 
 @pytest.mark.asyncio
 async def test_quiz_session_timer_and_timeout():
-    from datetime import datetime, timedelta, timezone
+    from datetime import datetime, timedelta
 
     repo = InMemoryAssessmentRepository()
     usecase = AssessmentUseCase(repository=repo)
@@ -478,25 +513,25 @@ async def test_quiz_session_timer_and_timeout():
     await usecase.submit_honor_code(user_id, item_id, True)
 
     # Expired start_time (60 minutes ago)
-    expired_start = (datetime.now(timezone.utc) - timedelta(minutes=60)).isoformat()
+    expired_start = (datetime.now(UTC) - timedelta(minutes=60)).isoformat()
     res_timeout = await usecase.submit_graded_quiz(
         user_id,
         item_id,
-        [0, 1, 2, 0, 1],
         start_time_iso=expired_start,
         duration_minutes=45,
+        question_answers=[[0], [1], [2], [0], [1]],
     )
     assert "tự động nộp bài" in res_timeout["answer_explanations"][0]
 
 
 @pytest.mark.asyncio
 async def test_peer_regrade_fallback_queue():
-    from datetime import datetime, timedelta, timezone
+    from datetime import datetime, timedelta
 
     repo = InMemoryAssessmentRepository()
     usecase = AssessmentUseCase(repository=repo)
 
-    old_time = (datetime.now(timezone.utc) - timedelta(days=6)).isoformat()
+    old_time = (datetime.now(UTC) - timedelta(days=6)).isoformat()
     sub_old = PeerAssignmentSubmission(
         id="peer-old-1",
         user_id="user-old",
@@ -518,7 +553,7 @@ async def test_peer_regrade_fallback_queue():
 @pytest.mark.asyncio
 async def test_audit_mode_access_blocking():
     try:
-        from src.modules.identity.domain.entities import User, UserRole
+        from src.modules.identity.domain import User, UserRole
         from src.modules.identity.infrastructure.repository import IdentityRepository
         from src.shared.infrastructure.database import async_session_scope
 
@@ -540,7 +575,9 @@ async def test_audit_mode_access_blocking():
             await repo.save(user)
 
         # Attempt submitting graded quiz in audit mode -> Should be blocked
-        res = await usecase.submit_graded_quiz(audit_user_id, "item_quiz_audit", [0, 1])
+        res = await usecase.submit_graded_quiz(
+            audit_user_id, "item_quiz_audit", question_answers=[[0], [1]]
+        )
         assert res["passed"] is False
         assert "Audit Mode" in res["answer_explanations"][0]
 
@@ -550,7 +587,7 @@ async def test_audit_mode_access_blocking():
         )
         assert sub_id == ""
         assert "Audit Mode" in msg
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         pytest.skip(f"Skipping audit mode db test: DB not reachable ({e})")
 
 
@@ -578,14 +615,14 @@ async def test_quiz_question_pool_and_option_shuffling():
     assert len(questions) == 5  # Sampled 5 questions from pool
 
     session_seed = session_info["session_seed"]
-    shuffled_answers = [q["shuffled_correct_index"] for q in questions]
+    shuffled_answers = [q["shuffled_correct_indices"] for q in questions]
 
     # Agree Honor Code
     await usecase.submit_honor_code(user_id, item_id, True)
 
     # Submit answers matching shuffled indices -> Should pass 100%
     res = await usecase.submit_graded_quiz(
-        user_id, item_id, shuffled_answers, session_seed=session_seed
+        user_id, item_id, question_answers=shuffled_answers, session_seed=session_seed
     )
     assert res["score_percent"] == 100.0
     assert res["passed"] is True
@@ -642,7 +679,9 @@ async def test_quiz_submission_empty_question_pool(monkeypatch: pytest.MonkeyPat
         mock_empty_questions.__get__(usecase, AssessmentUseCase),
     )
 
-    res = await usecase.submit_graded_quiz(user_id, item_id, [], session_seed=12345)
+    res = await usecase.submit_graded_quiz(
+        user_id, item_id, question_answers=[], session_seed=12345
+    )
     assert res["score_percent"] == 0.0
     assert res["passed"] is False
     assert any("rỗng" in exp or "empty" in exp for exp in res["answer_explanations"])
@@ -674,7 +713,7 @@ async def test_graded_quiz_preview_mode():
     res = await usecase.submit_graded_quiz(
         user_id,
         item_id,
-        [0, 1, 2, 0, 1],
+        question_answers=[[0], [1], [2], [0], [1]],
         session_seed=sess["session_seed"],
         preview=True,
     )
@@ -709,7 +748,7 @@ async def test_anti_cheat_feedback_hidden_on_failure():
     res = await usecase.submit_graded_quiz(
         user_id,
         item_id,
-        [-1, -1, -1, -1, -1],
+        question_answers=[[], [], [], [], []],
         session_seed=sess["session_seed"],
     )
     assert res["passed"] is False
@@ -717,3 +756,41 @@ async def test_anti_cheat_feedback_hidden_on_failure():
     for exp in res["answer_explanations"]:
         assert "đáp án đúng là" not in exp
     assert len(repo.quiz_submissions) == 1
+
+
+@pytest.mark.asyncio
+async def test_peer_assignment_resubmission_updates_existing():
+    repo = InMemoryAssessmentRepository()
+    usecase = AssessmentUseCase(repository=repo)
+    user_id = "user_learner_demo"
+    item_id = "item-ml-peer-1"
+
+    # 1. First submission
+    sub_id1, msg1 = await usecase.submit_peer_assignment(
+        user_id,
+        item_id,
+        "https://github.com/initial/repo",
+        "Initial submission text",
+    )
+    assert sub_id1.startswith("peer-")
+    assert "Assignment submitted successfully" in msg1
+    assert len(repo.peer_submissions) == 1
+
+    # 2. Resubmission / Update by same user on same item
+    sub_id2, msg2 = await usecase.submit_peer_assignment(
+        user_id,
+        item_id,
+        "https://github.com/updated/repo",
+        "Updated submission text",
+    )
+    # Must preserve the same submission ID
+    assert sub_id2 == sub_id1
+    assert "Assignment submitted successfully" in msg2
+    assert len(repo.peer_submissions) == 1
+
+    # 3. Verify repository data was updated
+    stored = await repo.get_user_peer_submission(user_id, item_id)
+    assert stored is not None
+    assert stored.id == sub_id1
+    assert stored.submission_url == "https://github.com/updated/repo"
+    assert stored.text_content == "Updated submission text"

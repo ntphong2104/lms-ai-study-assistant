@@ -1,33 +1,33 @@
-"""Starlette middleware xác thực JWT cho HTTP route /coursera-assets/.
+"""Starlette middleware xác thực JWT và kiểm tra quyền truy cập cho HTTP route /coursera-assets/.
 
-File public/ → cho qua không cần auth.
-File private/ hoặc file cũ (không có prefix) → yêu cầu JWT hợp lệ.
+- File public (prefix public/ hoặc folder public như thumbnails, banners, avatars) -> cho qua không cần auth.
+- File private/ hoặc file legacy -> yêu cầu JWT hợp lệ và kiểm tra quyền truy cập.
+- Trả về CORS headers đầy đủ cho response lỗi (401/403/400) để browser HTML5 video player hỗ trợ crossOrigin="use-credentials" với HttpOnly cookie.
 """
 
 import logging
+import posixpath
 from http.cookies import SimpleCookie
 
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 from starlette.types import ASGIApp, Receive, Scope, Send
 
+from src.modules.catalog.domain.constants import (
+    PUBLIC_ASSET_FOLDERS,
+    PUBLIC_ASSET_PREFIXES,
+)
 from src.shared.auth import decode_token
+from src.shared.config import settings
 
 logger = logging.getLogger(__name__)
 
-# Các prefix KHÔNG cần xác thực
-PUBLIC_PREFIXES = ("public/",)
-
-# Các route cần áp dụng middleware này
+# Route áp dụng middleware này
 PROTECTED_ROUTE_PREFIX = "/coursera-assets/"
 
 
 class AssetAuthMiddleware:
-    """Middleware kiểm tra JWT token cho route /coursera-assets/ trước khi vào proxy_media().
-
-    - Path bắt đầu bằng public/ → cho qua (thumbnail, banner, avatar)
-    - Path bắt đầu bằng private/ hoặc không có prefix → yêu cầu JWT
-    """
+    """Middleware kiểm tra JWT token và authorization cho route /coursera-assets/ trước khi vào proxy_media()."""
 
     def __init__(self, app: ASGIApp) -> None:
         self.app = app
@@ -44,50 +44,65 @@ class AssetAuthMiddleware:
             await self.app(scope, receive, send)
             return
 
-        import posixpath
-
         # Lấy phần path sau "/coursera-assets/" và chuẩn hóa
         raw_asset_path = path[len(PROTECTED_ROUTE_PREFIX) :]
         asset_path = posixpath.normpath(raw_asset_path).lstrip("/")
+        request = Request(scope, receive, send)
 
         # Nếu phát hiện path traversal độc hại ra khỏi root
         if ".." in raw_asset_path:
-            response = JSONResponse(
-                {"detail": "Invalid path"},
-                status_code=400,
-            )
+            response = self._make_error_response(request, "Invalid path", 400)
             await response(scope, receive, send)
             return
 
-        # File public → cho qua, không cần auth
-        if any(asset_path.startswith(prefix) for prefix in PUBLIC_PREFIXES):
+        # HTTP OPTIONS preflight requests -> cho qua để proxy_media() xử lý CORS headers
+        if request.method == "OPTIONS":
             await self.app(scope, receive, send)
             return
 
-        # File private hoặc file cũ (không có prefix) → yêu cầu JWT
-        request = Request(scope, receive, send)
+        # File public (prefix "public/" hoặc thuộc folder thumbnails, banners, avatars) -> cho qua không cần auth
+        first_segment = asset_path.split("/")[0] if asset_path else ""
+        if (
+            any(asset_path.startswith(prefix) for prefix in PUBLIC_ASSET_PREFIXES)
+            or first_segment in PUBLIC_ASSET_FOLDERS
+        ):
+            await self.app(scope, receive, send)
+            return
 
+        # File private hoặc file legacy -> yêu cầu JWT
         token = self._extract_token(request)
 
         if not token:
-            response = JSONResponse(
-                {"detail": "Yêu cầu đăng nhập để truy cập tài nguyên này"},
-                status_code=401,
+            response = self._make_error_response(
+                request, "Yêu cầu đăng nhập để truy cập tài nguyên này", 401
             )
             await response(scope, receive, send)
             return
 
         payload = decode_token(token)
         if not payload or payload.get("type") != "access" or not payload.get("sub"):
-            response = JSONResponse(
-                {"detail": "Token không hợp lệ hoặc đã hết hạn"},
-                status_code=401,
+            response = self._make_error_response(
+                request, "Token không hợp lệ hoặc đã hết hạn", 401
             )
             await response(scope, receive, send)
             return
 
-        # Token hợp lệ → cho qua
+        # Token hợp lệ -> cho qua
         await self.app(scope, receive, send)
+
+    @staticmethod
+    def _make_error_response(
+        request: Request, detail: str, status_code: int
+    ) -> JSONResponse:
+        """Tạo error response chứa đầy đủ CORS headers để browser HTML5 video player xử lý HttpOnly cookie."""
+        origin = request.headers.get("origin", "")
+        headers = {}
+        if origin and origin in settings.CORS_ORIGINS:
+            headers["Access-Control-Allow-Origin"] = origin
+            headers["Access-Control-Allow-Credentials"] = "true"
+        return JSONResponse(
+            {"detail": detail}, status_code=status_code, headers=headers
+        )
 
     @staticmethod
     def _extract_token(request: Request) -> str | None:

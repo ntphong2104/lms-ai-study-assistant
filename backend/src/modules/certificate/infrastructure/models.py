@@ -1,9 +1,10 @@
-from typing import Any, Optional
+from typing import Any
 
-from sqlalchemy import Boolean, Integer, JSON, String, Text
+from sqlalchemy import JSON, Boolean, Integer, String, Text, UniqueConstraint
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
-from src.modules.certificate.domain.constants import (
+from src.modules.certificate.domain import (
     DEFAULT_FINANCIAL_AID_REVIEW_DEADLINE_DAYS,
 )
 from src.shared.infrastructure.database import Base
@@ -11,6 +12,9 @@ from src.shared.infrastructure.database import Base
 
 class FinancialAidModel(Base):
     __tablename__ = "financial_aid_applications"
+    __table_args__ = (
+        UniqueConstraint("user_id", "course_id", name="uq_financial_aid_user_course"),
+    )
 
     id: Mapped[str] = mapped_column(String(64), primary_key=True)
     user_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
@@ -24,6 +28,9 @@ class FinancialAidModel(Base):
 
 class CertificateModel(Base):
     __tablename__ = "verified_certificates"
+    __table_args__ = (
+        UniqueConstraint("user_id", "course_id", name="uq_certificate_user_course"),
+    )
 
     certificate_id: Mapped[str] = mapped_column(String(64), primary_key=True)
     user_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
@@ -38,11 +45,11 @@ class CertificateModel(Base):
     verification_url: Mapped[str] = mapped_column(String(512), nullable=False)
     qr_code_url: Mapped[str] = mapped_column(String(512), nullable=False, default="")
     open_badges_json_ld: Mapped[dict[str, Any]] = mapped_column(
-        JSON, nullable=False, default=dict
+        JSON().with_variant(JSONB, "postgresql"), nullable=False, default=dict
     )
     is_revoked: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     revoked_reason: Mapped[str] = mapped_column(Text, nullable=False, default="")
-    specialization_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    specialization_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
     signer_name: Mapped[str] = mapped_column(String(255), nullable=False, default="")
     signer_title: Mapped[str] = mapped_column(String(255), nullable=False, default="")
     signature_image_url: Mapped[str] = mapped_column(

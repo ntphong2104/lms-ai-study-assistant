@@ -2,8 +2,8 @@ from connectrpc.request import RequestContext
 
 from src.gen.learning.v1 import learning_pb as pb
 from src.gen.learning.v1.learning_connect import LearningService
-from src.modules.learning.application.learning_usecase import LearningUseCase
-from src.modules.learning.domain.entities import (
+from src.modules.learning.application import LearningUseCase
+from src.modules.learning.domain import (
     DeadlineStatus,
     EnrolledCourseSummary,
     LearningProgress,
@@ -120,6 +120,19 @@ class LearningHandler(LearningService):
         )
         return pb.ListPersonalNotesResponse(notes=[_to_pb_note(n) for n in notes])
 
+    async def delete_personal_note(
+        self,
+        request: pb.DeletePersonalNoteRequest,
+        ctx: RequestContext[
+            pb.DeletePersonalNoteRequest, pb.DeletePersonalNoteResponse
+        ],
+    ) -> pb.DeletePersonalNoteResponse:
+        current_user = require_current_user()
+        success = await self.use_case.delete_personal_note(
+            note_id=request.note_id, user_id=current_user.id
+        )
+        return pb.DeletePersonalNoteResponse(success=success)
+
     async def mark_item_complete(
         self,
         request: pb.MarkItemCompleteRequest,
@@ -130,7 +143,6 @@ class LearningHandler(LearningService):
             user_id=current_user.id,
             course_id=request.course_id,
             item_id=request.item_id,
-            total_course_items=request.total_course_items,
         )
         return pb.MarkItemCompleteResponse(
             success=success, updated_progress=_to_pb_progress(progress)

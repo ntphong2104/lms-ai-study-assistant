@@ -1,5 +1,4 @@
 from functools import lru_cache
-from typing import Optional
 
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -17,6 +16,10 @@ class Settings(BaseSettings):
     # 1. Server settings
     ENV: str = Field(default="development", description="Environment mode")
     BACKEND_PORT: int = Field(default=8000, description="Backend port")
+    CORS_ORIGINS: list[str] = Field(
+        default_factory=lambda: ["http://localhost:3000", "http://127.0.0.1:3000"],
+        description="Allowed CORS origins for web application",
+    )
 
     # 2. PostgreSQL Database URL & Redis Cache/Broker URL
     DATABASE_URL: str = Field(
@@ -64,18 +67,18 @@ class Settings(BaseSettings):
     )
 
     # 5. OpenTelemetry & Jaeger Observability
-    OTEL_EXPORTER_OTLP_ENDPOINT: Optional[str] = Field(
+    OTEL_EXPORTER_OTLP_ENDPOINT: str | None = Field(
         default=None,
         description="OpenTelemetry OTLP Collector Endpoint (e.g. http://localhost:4317)",
     )
 
     # 6. VNPay Sandbox Gateway Configuration
     VNPAY_TMN_CODE: str = Field(
-        default="PLM6WVVN",
+        default="",
         description="VNPay Merchant Terminal Code (vnp_TmnCode)",
     )
     VNPAY_HASH_SECRET: str = Field(
-        default="MLQIAARTMNPRIGVBPAFCRFVCASOBHRTS",
+        default="",
         description="VNPay Secret Key for HMAC-SHA512 checksum calculation",
     )
     VNPAY_PAYMENT_URL: str = Field(

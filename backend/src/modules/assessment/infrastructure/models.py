@@ -1,8 +1,20 @@
 from typing import Any
-from sqlalchemy import ARRAY, Boolean, Float, ForeignKey, Integer, JSON, String, Text
+
+from sqlalchemy import (
+    ARRAY,
+    JSON,
+    Boolean,
+    Float,
+    ForeignKey,
+    Integer,
+    String,
+    Text,
+    UniqueConstraint,
+)
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from src.modules.assessment.domain.constants import (
+from src.modules.assessment.domain import (
     DEFAULT_PASSING_THRESHOLD_PERCENT,
     DEFAULT_QUIZ_EASY_COUNT,
     DEFAULT_QUIZ_HARD_COUNT,
@@ -70,6 +82,9 @@ class LabSubmissionModel(Base):
 
 class PeerAssignmentSubmissionModel(Base):
     __tablename__ = "peer_assignment_submissions"
+    __table_args__ = (
+        UniqueConstraint("user_id", "item_id", name="uq_peer_submission_user_item"),
+    )
 
     id: Mapped[str] = mapped_column(String(64), primary_key=True)
     user_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
@@ -85,6 +100,13 @@ class PeerAssignmentSubmissionModel(Base):
 
 class PeerReviewModel(Base):
     __tablename__ = "peer_reviews"
+    __table_args__ = (
+        UniqueConstraint(
+            "submission_id",
+            "reviewer_user_id",
+            name="uq_peer_review_submission_reviewer",
+        ),
+    )
 
     id: Mapped[str] = mapped_column(String(64), primary_key=True)
     submission_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
@@ -92,7 +114,9 @@ class PeerReviewModel(Base):
         String(64), nullable=False, index=True
     )
     item_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
-    rubric_criteria_json: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
+    rubric_criteria_json: Mapped[dict[str, Any]] = mapped_column(
+        JSON().with_variant(JSONB, "postgresql"), nullable=False
+    )
     total_score: Mapped[float] = mapped_column(Float, nullable=False)
     is_outlier: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     created_at: Mapped[str] = mapped_column(String(64), nullable=False)
@@ -100,6 +124,11 @@ class PeerReviewModel(Base):
 
 class GradeAppealModel(Base):
     __tablename__ = "grade_appeals"
+    __table_args__ = (
+        UniqueConstraint(
+            "user_id", "submission_id", name="uq_grade_appeal_user_submission"
+        ),
+    )
 
     id: Mapped[str] = mapped_column(String(64), primary_key=True)
     user_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
@@ -176,7 +205,10 @@ class QuizMatrixModel(Base):
 
     item_id: Mapped[str] = mapped_column(String(64), primary_key=True)
     bank_id: Mapped[str] = mapped_column(
-        String(64), ForeignKey("question_banks.id"), nullable=False
+        String(64),
+        ForeignKey("question_banks.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
     )
     time_limit_minutes: Mapped[int] = mapped_column(
         Integer, nullable=False, default=DEFAULT_QUIZ_TIME_LIMIT_MINUTES
@@ -216,7 +248,9 @@ class QuizSessionModel(Base):
     id: Mapped[str] = mapped_column(String(64), primary_key=True)
     user_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
     item_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
-    questions_json: Mapped[list[dict[str, Any]]] = mapped_column(JSON, nullable=False)
+    questions_json: Mapped[list[dict[str, Any]]] = mapped_column(
+        JSON().with_variant(JSONB, "postgresql"), nullable=False
+    )
     started_at: Mapped[str] = mapped_column(String(64), nullable=False)
     expires_at: Mapped[str] = mapped_column(String(64), nullable=False)
     time_limit_minutes: Mapped[int] = mapped_column(Integer, nullable=False)
@@ -233,6 +267,8 @@ class QuizActiveSessionModel(Base):
     user_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
     item_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
     session_seed: Mapped[int] = mapped_column(Integer, nullable=False)
-    questions_json: Mapped[list[dict[str, Any]]] = mapped_column(JSON, nullable=False)
+    questions_json: Mapped[list[dict[str, Any]]] = mapped_column(
+        JSON().with_variant(JSONB, "postgresql"), nullable=False
+    )
     started_at: Mapped[str] = mapped_column(String(64), nullable=False)
     expires_at: Mapped[str] = mapped_column(String(64), nullable=False)

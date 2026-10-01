@@ -1,19 +1,21 @@
-from typing import Optional
 from sqlalchemy import (
     ARRAY,
     Boolean,
-    Enum as SQLEnum,
     ForeignKey,
     Integer,
     String,
     Text,
+    UniqueConstraint,
+)
+from sqlalchemy import (
+    Enum as SQLEnum,
 )
 from sqlalchemy.orm import Mapped, mapped_column
 
-from src.modules.identity.domain.constants import (
+from src.modules.identity.domain import (
     DEFAULT_ENTERPRISE_KEY_TOTAL_SEATS,
+    UserRole,
 )
-from src.modules.identity.domain.entities import UserRole
 from src.shared.infrastructure.database import Base
 
 
@@ -35,10 +37,10 @@ class UserModel(Base):
         default=UserRole.LEARNER,
     )
     avatar_url: Mapped[str] = mapped_column(String(512), nullable=False, default="")
-    enterprise_seat_key: Mapped[Optional[str]] = mapped_column(
-        String(128), nullable=True
+    enterprise_seat_key: Mapped[str | None] = mapped_column(
+        String(128), nullable=True, index=True
     )
-    seat_assigned_at: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    seat_assigned_at: Mapped[str | None] = mapped_column(Text, nullable=True)
     password_hash: Mapped[str] = mapped_column(String(255), nullable=False, default="")
     is_identity_verified: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=False
@@ -47,7 +49,7 @@ class UserModel(Base):
         String(512), nullable=False, default=""
     )
     title: Mapped[str] = mapped_column(String(255), nullable=False, default="")
-    google_id: Mapped[Optional[str]] = mapped_column(
+    google_id: Mapped[str | None] = mapped_column(
         String(255), nullable=True, unique=True, index=True
     )
 
@@ -66,6 +68,9 @@ class OrganizationModel(Base):
 
 class OrganizationMemberModel(Base):
     __tablename__ = "organization_members"
+    __table_args__ = (
+        UniqueConstraint("organization_id", "user_id", name="uq_org_member_org_user"),
+    )
 
     id: Mapped[str] = mapped_column(String(64), primary_key=True)
     user_id: Mapped[str] = mapped_column(
@@ -85,6 +90,23 @@ class OrganizationMemberModel(Base):
         String(32), nullable=False, default="ACTIVE", server_default="ACTIVE"
     )
     joined_at: Mapped[str] = mapped_column(String(64), nullable=False, default="")
+
+
+class OrganizationAuditLogModel(Base):
+    __tablename__ = "organization_audit_logs"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    organization_id: Mapped[str] = mapped_column(
+        String(64),
+        ForeignKey("organizations.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    actor_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    target_user_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    action: Mapped[str] = mapped_column(String(64), nullable=False)
+    details: Mapped[str] = mapped_column(Text, nullable=True, default="")
+    created_at: Mapped[str] = mapped_column(String(64), nullable=False)
 
 
 class EnterpriseLicenseModel(Base):
@@ -130,3 +152,44 @@ class InstructorApplicationModel(Base):
     rejection_reason: Mapped[str] = mapped_column(Text, nullable=False, default="")
     created_at: Mapped[str] = mapped_column(String(64), nullable=False, default="")
     reviewed_at: Mapped[str] = mapped_column(String(64), nullable=False, default="")
+
+
+class InvitationModel(Base):
+    __tablename__ = "invitations"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    type: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    status: Mapped[str] = mapped_column(
+        String(32),
+        nullable=False,
+        default="INVITATION_STATUS_PENDING",
+        server_default="INVITATION_STATUS_PENDING",
+        index=True,
+    )
+    inviter_id: Mapped[str] = mapped_column(
+        String(64),
+        ForeignKey("users.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    inviter_name: Mapped[str] = mapped_column(String(255), nullable=False, default="")
+    inviter_email: Mapped[str] = mapped_column(String(255), nullable=False, default="")
+    invitee_email: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
+    invitee_id: Mapped[str | None] = mapped_column(
+        String(64),
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    target_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    target_name: Mapped[str] = mapped_column(String(255), nullable=False, default="")
+    role_id: Mapped[str] = mapped_column(String(64), nullable=False, default="")
+    token_hash: Mapped[str] = mapped_column(
+        String(64), nullable=False, unique=True, index=True
+    )
+    message: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    expires_at: Mapped[str] = mapped_column(
+        String(64), nullable=False, default="", index=True
+    )
+    created_at: Mapped[str] = mapped_column(String(64), nullable=False, default="")
+    responded_at: Mapped[str] = mapped_column(String(64), nullable=False, default="")

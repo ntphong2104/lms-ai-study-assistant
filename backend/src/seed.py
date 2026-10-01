@@ -1109,10 +1109,10 @@ async def seed_database(reset: bool = False, auto_mode: bool = False) -> None:
 
         team_user_phong = UserModel(
             id="user_team_phong",
-            email="n22dccn158@student.ptithcm.edu.vn",
+            email="phong.learner@coursera.ai",
             full_name="Nguyễn Thanh Phong",
             role=UserRole.LEARNER,
-            avatar_url="https://api.dicebear.com/7.x/avataaars/svg?seed=n22dccn158",
+            avatar_url="https://api.dicebear.com/7.x/avataaars/svg?seed=phong.learner@coursera.ai",
             enterprise_seat_key="ENT-DEMO-2026-X99",
             password_hash=default_pw_hash,
             is_identity_verified=False,
@@ -1120,10 +1120,10 @@ async def seed_database(reset: bool = False, auto_mode: bool = False) -> None:
 
         team_user_instructor = UserModel(
             id="user_team_instructor",
-            email="phongnguyen.30604@gmail.com",
+            email="phong.instructor@coursera.ai",
             full_name="Phong Nguyễn",
             role=UserRole.INSTRUCTOR,
-            avatar_url="https://api.dicebear.com/7.x/avataaars/svg?seed=phongnguyen30604",
+            avatar_url="https://api.dicebear.com/7.x/avataaars/svg?seed=phong.instructor@coursera.ai",
             enterprise_seat_key="",
             password_hash=default_pw_hash,
             is_identity_verified=True,
@@ -1131,10 +1131,10 @@ async def seed_database(reset: bool = False, auto_mode: bool = False) -> None:
 
         team_user_admin = UserModel(
             id="user_team_admin",
-            email="ttxmath1110@gmail.com",
+            email="phong.admin@coursera.ai",
             full_name="Thanh Phong Nguyễn",
             role=UserRole.ADMIN,
-            avatar_url="https://api.dicebear.com/7.x/avataaars/svg?seed=ttxmath1110",
+            avatar_url="https://api.dicebear.com/7.x/avataaars/svg?seed=phong.admin@coursera.ai",
             enterprise_seat_key="",
             password_hash=default_pw_hash,
             is_identity_verified=True,

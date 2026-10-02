@@ -67,7 +67,7 @@ async def _exchange_google_code(
             "email": payload.get("email", ""),
             "name": payload.get("name", payload.get("email", "").split("@")[0]),
             "picture": payload.get("picture", ""),
-            "email_verified": payload.get("email_verified", True),
+            "email_verified": bool(payload.get("email_verified", False)),
         }
 
     if not client_secret:
@@ -127,7 +127,7 @@ async def _exchange_google_code(
         "email": payload.get("email", ""),
         "name": payload.get("name", payload.get("email", "").split("@")[0]),
         "picture": payload.get("picture", ""),
-        "email_verified": payload.get("email_verified", True),
+        "email_verified": bool(payload.get("email_verified", False)),
     }
 
 
@@ -407,9 +407,19 @@ class AuthUseCase:
         google_id = str(claims["google_id"])
         full_name = str(claims.get("name", "") or email.split("@")[0])
         avatar_url = str(claims.get("picture", ""))
-        email_verified = claims.get("email_verified") is True or bool(
-            claims.get("email_verified")
-        )
+        email_verified = claims.get("email_verified") is True
+
+        if not email_verified:
+            logger.warning(
+                "Google auth denied for email %s: Google email_verified is False or missing",
+                email,
+            )
+            return (
+                None,
+                "",
+                "",
+                "Không thể đăng nhập: Địa chỉ email chưa được Google xác minh.",
+            )
 
         async with database.async_session_scope() as session:
             repo = repo_module.IdentityRepository(session)
@@ -441,17 +451,6 @@ class AuthUseCase:
             else:
                 updated = False
                 if not user.google_id:
-                    if not email_verified:
-                        logger.warning(
-                            "Account linking denied for email %s: Google email_verified is False",
-                            email,
-                        )
-                        return (
-                            None,
-                            "",
-                            "",
-                            "Không thể liên kết tài khoản: Địa chỉ email chưa được Google xác minh.",
-                        )
                     user.google_id = google_id
                     updated = True
                 if avatar_url and not user.avatar_url:
@@ -477,6 +476,14 @@ class AuthUseCase:
         payload = await _exchange_google_code(authorization_code, nonce, redirect_uri)
         if not payload:
             return "", "", "", "Mã xác thực Google không hợp lệ hoặc đã hết hạn."
+
+        if payload.get("email_verified") is not True:
+            return (
+                "",
+                "",
+                "",
+                "Không thể đặt lại mật khẩu: Địa chỉ email chưa được Google xác minh.",
+            )
 
         raw_email = payload.get("email", "")
         email = (raw_email if isinstance(raw_email, str) else "").strip().lower()

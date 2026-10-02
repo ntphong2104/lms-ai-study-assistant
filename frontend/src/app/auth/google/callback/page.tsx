@@ -43,37 +43,43 @@ export default function GoogleCallbackPage() {
       return;
     }
 
-    // CSRF State Validation & Target Redirect Extraction
+    // CSRF State Validation (Fail-Closed) & Target Redirect Extraction
     const stateParam = params.get("state");
     const cookieMatch = document.cookie.match(/(?:^|; )g_oauth_state=([^;]*)/);
     const cookieCsrfToken = cookieMatch ? decodeURIComponent(cookieMatch[1]) : "";
     document.cookie = "g_oauth_state=; Path=/; max-age=0";
 
     let targetRedirectUrl = "";
-    if (stateParam) {
+    let isValidState = false;
+
+    if (cookieCsrfToken && stateParam) {
       try {
         const stateObj = JSON.parse(decodeURIComponent(stateParam));
         if (stateObj && typeof stateObj === "object") {
           const { csrfToken, redirectUrl } = stateObj;
-          if (cookieCsrfToken && csrfToken && csrfToken !== cookieCsrfToken) {
-            setErrorMsg("Xác thực OAuth State không hợp lệ, nghi ngờ tấn công CSRF!");
-            setTimeout(() => {
-              window.location.replace("/auth/login");
-            }, 2000);
-            return;
-          }
-          if (
-            redirectUrl &&
-            typeof redirectUrl === "string" &&
-            redirectUrl.startsWith("/") &&
-            !redirectUrl.startsWith("//")
-          ) {
-            targetRedirectUrl = redirectUrl;
+          if (csrfToken && csrfToken === cookieCsrfToken) {
+            isValidState = true;
+            if (
+              redirectUrl &&
+              typeof redirectUrl === "string" &&
+              redirectUrl.startsWith("/") &&
+              !redirectUrl.startsWith("//")
+            ) {
+              targetRedirectUrl = redirectUrl;
+            }
           }
         }
       } catch {
-        // Fallback for non-JSON state values
+        isValidState = false;
       }
+    }
+
+    if (!isValidState) {
+      setErrorMsg("Xác thực OAuth State không hợp lệ hoặc đã hết hạn, nghi ngờ tấn công CSRF!");
+      setTimeout(() => {
+        window.location.replace("/auth/login");
+      }, 2000);
+      return;
     }
 
     const processLogin = async () => {
